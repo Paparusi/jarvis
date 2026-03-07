@@ -144,6 +144,89 @@ _WORDLISTS: dict[str, list[str]] = {
         "/Dockerfile", "/docker-compose.yml", "/.dockerenv",
         "/.aws/credentials", "/.ssh/id_rsa", "/id_rsa",
     ],
+    "bounty": [
+        # Env/config files (high value)
+        "/.env", "/.env.bak", "/.env.local", "/.env.production", "/.env.staging",
+        "/.env.old", "/.env.dev", "/.env.example", "/.env.backup",
+        "/config.php", "/config.yml", "/config.json", "/config.bak",
+        "/wp-config.php", "/wp-config.php.bak", "/wp-config.php.old",
+        "/web.config", "/appsettings.json", "/application.yml", "/application.properties",
+        # Git exposure
+        "/.git", "/.git/HEAD", "/.git/config", "/.git/index", "/.gitignore",
+        "/.git/logs/HEAD", "/.git/refs/heads/master", "/.git/refs/heads/main",
+        # Source maps (JS secrets)
+        "/main.js.map", "/app.js.map", "/bundle.js.map", "/vendor.js.map",
+        "/static/js/main.js.map", "/static/js/app.js.map",
+        "/assets/js/app.js.map", "/dist/main.js.map",
+        # API docs / GraphQL
+        "/swagger.json", "/swagger.yaml", "/swagger-ui.html", "/swagger-ui/",
+        "/openapi.json", "/openapi.yaml", "/api-docs", "/api-docs.json",
+        "/graphql", "/graphiql", "/playground", "/altair",
+        "/api/v1", "/api/v2", "/api/v3",
+        # Debug / Monitoring endpoints
+        "/actuator", "/actuator/env", "/actuator/heapdump", "/actuator/configprops",
+        "/actuator/mappings", "/actuator/beans", "/actuator/trace",
+        "/debug", "/debug/pprof", "/debug/vars", "/__debug__",
+        "/metrics", "/prometheus", "/health", "/healthz",
+        "/server-status", "/server-info", "/status",
+        "/elmah.axd", "/trace.axd", "/glimpse.axd",
+        # Cloud metadata
+        "/.aws/credentials", "/.aws/config",
+        "/metadata", "/latest/meta-data",
+        "/.docker/config.json", "/docker-compose.yml", "/docker-compose.yaml",
+        "/Dockerfile",
+        # WordPress
+        "/wp-json/wp/v2/users", "/xmlrpc.php", "/wp-login.php",
+        "/wp-content/debug.log", "/wp-content/uploads/",
+        "/wp-includes/version.php",
+        # Laravel / PHP
+        "/storage/logs/laravel.log", "/_ignition/health-check",
+        "/telescope", "/horizon", "/nova",
+        "/phpinfo.php", "/info.php", "/php_info.php",
+        "/.htpasswd", "/.htaccess",
+        # Node.js
+        "/package.json", "/package-lock.json", "/.npmrc",
+        "/node_modules/.package-lock.json",
+        "/yarn.lock", "/.yarnrc",
+        # CI/CD
+        "/.github/workflows", "/.gitlab-ci.yml", "/Jenkinsfile",
+        "/.circleci/config.yml", "/.travis.yml",
+        "/.github/CODEOWNERS",
+        # Backup / Database
+        "/backup.sql", "/dump.sql", "/backup.zip", "/backup.tar.gz",
+        "/data.json", "/data.sql", "/export.csv", "/export.json",
+        "/db.sql", "/database.sql", "/site.bak", "/web.bak",
+        # Admin panels
+        "/admin", "/admin/login", "/manage", "/console", "/terminal",
+        "/portal", "/dashboard", "/cpanel", "/panel",
+        "/administrator", "/phpmyadmin", "/adminer", "/adminer.php",
+        # Security / Well-known
+        "/.well-known/security.txt", "/robots.txt", "/sitemap.xml",
+        "/crossdomain.xml", "/clientaccesspolicy.xml",
+        "/security.txt", "/humans.txt",
+        # SVN / Hg
+        "/.svn", "/.svn/entries", "/.svn/wc.db",
+        "/.hg", "/.hgrc",
+        # Misc sensitive
+        "/.DS_Store", "/Thumbs.db",
+        "/composer.json", "/composer.lock",
+        "/Gemfile", "/Gemfile.lock",
+        "/requirements.txt", "/Pipfile", "/Pipfile.lock",
+        "/id_rsa", "/.ssh/id_rsa", "/.ssh/authorized_keys",
+        "/error_log", "/access_log", "/debug.log",
+        # Spring Boot
+        "/env", "/configprops", "/mappings", "/beans", "/autoconfig",
+        # Django
+        "/__debug__/", "/admin/doc/", "/api/schema/",
+        # Ruby on Rails
+        "/rails/info", "/rails/info/routes",
+        # ASP.NET
+        "/elmah", "/Elmah.axd", "/trace.axd",
+        # Firebase
+        "/.firebaserc", "/firebase.json", "/firestore.rules",
+        # Kubernetes
+        "/.kube/config", "/api/v1/namespaces",
+    ],
 }
 
 
@@ -1331,7 +1414,7 @@ dir_bruteforce_tool = ToolDefinition(
             name="wordlist", type="string",
             description="Wordlist để sử dụng",
             required=False, default="common",
-            enum=["common", "medium", "small", "api", "backup"],
+            enum=["common", "medium", "small", "api", "backup", "bounty"],
         ),
     ],
     handler=dir_bruteforce,

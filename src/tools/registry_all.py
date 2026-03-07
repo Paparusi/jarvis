@@ -71,6 +71,10 @@ from src.tools.threat_intel import (
     virustotal_lookup_tool, abuseipdb_check_tool,
     malware_hash_check_tool, shodan_search_tool,
 )
+from src.tools.security_advanced import (
+    subdomain_takeover_tool, js_secrets_scan_tool,
+    open_redirect_tool, nuclei_scan_tool,
+)
 
 from src.tools.base import ToolDefinition
 
@@ -125,4 +129,7 @@ ALL_TOOLS: list[ToolDefinition] = [
     # Threat Intelligence
     virustotal_lookup_tool, abuseipdb_check_tool,
     malware_hash_check_tool, shodan_search_tool,
+    # Security Advanced (Bug Bounty)
+    subdomain_takeover_tool, js_secrets_scan_tool,
+    open_redirect_tool, nuclei_scan_tool,
 ]

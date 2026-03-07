@@ -109,6 +109,34 @@ class BountyPipeline:
         # 1. Recon on main domain
         recon_result = await self.recon.run_full(domain, url)
 
+        # 1b. Subdomain takeover check
+        if recon_result.subdomains:
+            subs_to_check = [
+                s for s in recon_result.subdomains if not s.startswith("*")
+            ][:50]
+            if subs_to_check:
+                try:
+                    takeover_result = await self.tool_registry.execute(
+                        "subdomain_takeover",
+                        subdomains=",".join(subs_to_check),
+                    )
+                    if takeover_result.success and takeover_result.data:
+                        for vuln in takeover_result.data.get("vulnerable", []):
+                            all_findings.append(BountyFinding(
+                                target_id=0,
+                                vuln_type="subdomain_takeover",
+                                severity="HIGH",
+                                cvss=8.8,
+                                confidence=0.85,
+                                title=f"Subdomain takeover: {vuln.get('subdomain', '?')} ({vuln.get('service', '?')})",
+                                description=f"CNAME {vuln.get('cname', '?')} points to unclaimed {vuln.get('service', '?')} resource",
+                                poc=f"dig CNAME {vuln.get('subdomain', '')}",
+                            ))
+                    log.info("takeover_check_complete", subdomains=len(subs_to_check),
+                             vulnerable=len(takeover_result.data.get("vulnerable", [])) if takeover_result.data else 0)
+                except Exception as exc:
+                    log.warning("takeover_check_failed", error=str(exc))
+
         # 2. Scan main domain
         scan_result = await self.scanner.scan(url, recon_result)
         all_findings = list(scan_result.findings)

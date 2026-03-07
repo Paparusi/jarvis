@@ -20,6 +20,9 @@ _VULN_TO_TOOL: dict[str, str] = {
     "headers": "header_audit",
     "missing_headers": "header_audit",
     "insecure_cookies": "header_audit",
+    "js_secrets": "js_secrets_scan",
+    "open_redirect": "open_redirect_test",
+    "subdomain_takeover": "subdomain_takeover",
 }
 
 _SEVERITY_MULTIPLIER: dict[str, tuple[float, float]] = {
@@ -48,6 +51,22 @@ class Verifier:
         # Special handling for info_disclosure (dir_bruteforce findings)
         if finding.vuln_type == "info_disclosure" and finding.poc:
             return await self._verify_info_disclosure(finding)
+
+        # Nuclei findings: keep original confidence (already verified by nuclei engine)
+        if finding.vuln_type.startswith("nuclei_"):
+            return finding
+
+        # js_secrets: uses "secrets_found" not "vulnerable"
+        if finding.vuln_type == "js_secrets":
+            try:
+                result = await self.registry.execute("js_secrets_scan", url=url)
+                if result.success and result.data and result.data.get("secrets_found"):
+                    finding.confidence = max(finding.confidence, 0.90)
+                else:
+                    finding.confidence = min(finding.confidence, 0.40)
+            except Exception:
+                pass
+            return finding
 
         tool_name = _VULN_TO_TOOL.get(finding.vuln_type)
         if not tool_name:

@@ -23,6 +23,8 @@ _SCAN_TOOLS: list[tuple[str, str, str, float]] = [
     ("sqli_test", "sqli", "CRITICAL", 9.8),
     ("xss_scan", "xss", "HIGH", 7.5),
     ("lfi_test", "lfi", "HIGH", 8.0),
+    ("js_secrets_scan", "js_secrets", "HIGH", 8.2),
+    ("open_redirect_test", "open_redirect", "MEDIUM", 6.1),
     ("cors_check", "cors", "MEDIUM", 5.3),
     ("header_audit", "headers", "LOW", 3.0),
     ("dir_bruteforce", "dir_enum", "INFO", 0.0),
@@ -73,6 +75,49 @@ class VulnScanner:
         """
         findings: list[BountyFinding] = []
         data = tool_result.data or {}
+
+        # --- js_secrets_scan: uses "secrets_found" instead of "vulnerable" ---
+        if tool_name == "js_secrets_scan":
+            if not data.get("secrets_found"):
+                return []
+            for secret in data.get("findings", []):
+                pattern_name = secret.get("pattern", "unknown")
+                # AWS keys and private keys are CRITICAL
+                pn_lower = pattern_name.lower()
+                if "aws" in pn_lower or "private key" in pn_lower:
+                    sev, cvss_val = "CRITICAL", 9.5
+                elif any(k in pn_lower for k in ("github", "stripe secret", "slack", "sendgrid")):
+                    sev, cvss_val = "HIGH", 8.5
+                else:
+                    sev, cvss_val = "HIGH", 8.2
+                findings.append(BountyFinding(
+                    target_id=0,
+                    vuln_type="js_secrets",
+                    severity=sev,
+                    cvss=cvss_val,
+                    confidence=0.85,
+                    title=f"Secret exposed in JS: {pattern_name} on {url}",
+                    description=f"Found {pattern_name} pattern in {secret.get('source', 'JS file')}",
+                    poc=f"Pattern: {pattern_name}, Match: {str(secret.get('match', ''))[:100]}",
+                ))
+            return findings
+
+        # --- open_redirect_test: uses "vulnerable" flag ---
+        if tool_name == "open_redirect_test":
+            if not data.get("vulnerable"):
+                return []
+            for redir in data.get("findings", []):
+                findings.append(BountyFinding(
+                    target_id=0,
+                    vuln_type="open_redirect",
+                    severity="MEDIUM",
+                    cvss=6.1,
+                    confidence=0.80,
+                    title=f"Open Redirect via '{redir.get('param', '?')}' on {url}",
+                    description=f"Parameter '{redir.get('param')}' redirects to attacker-controlled domain",
+                    poc=f"param={redir.get('param')}, payload={redir.get('payload', '')}",
+                ))
+            return findings
 
         # --- Tools with explicit "vulnerable" flag ---
         if tool_name in ("sqli_test", "xss_scan", "lfi_test", "cors_check"):
@@ -216,12 +261,15 @@ class VulnScanner:
 
         async def _run_scan_tool(tool_name: str) -> tuple[str, ToolResult | None]:
             try:
-                # Injection tools need URLs with params
+                # Injection tools need URLs with params; js_secrets and open_redirect use base URL
                 tool_url = test_url if tool_name in ("sqli_test", "xss_scan", "lfi_test") else url
                 kwargs: dict[str, Any] = {"url": tool_url}
                 # lfi_test requires a 'param' argument
                 if tool_name == "lfi_test":
                     kwargs["param"] = "id"
+                # dir_bruteforce: use bounty wordlist for better coverage
+                if tool_name == "dir_bruteforce":
+                    kwargs["wordlist"] = "bounty"
                 tr = await self.registry.execute(tool_name, **kwargs)
                 return tool_name, tr
             except Exception as exc:
@@ -278,6 +326,34 @@ class VulnScanner:
                         ))
                 except (ValueError, TypeError):
                     pass
+
+        # 6. Nuclei scan (separate step — longer timeout, not in parallel tools)
+        try:
+            nuclei_result = await self.registry.execute("nuclei_scan", url=url)
+            if nuclei_result.success and nuclei_result.data:
+                result.tool_results["nuclei_scan"] = nuclei_result
+                nuclei_findings = nuclei_result.data.get("findings", [])
+                _sev_map = {"critical": "CRITICAL", "high": "HIGH", "medium": "MEDIUM",
+                            "low": "LOW", "info": "INFO"}
+                _cvss_map = {"critical": 9.5, "high": 8.0, "medium": 5.5, "low": 3.0, "info": 0.0}
+                for nf in nuclei_findings[:50]:
+                    sev_raw = nf.get("severity", "info").lower()
+                    sev = _sev_map.get(sev_raw, "INFO")
+                    cvss = _cvss_map.get(sev_raw, 0.0)
+                    if sev == "INFO":
+                        continue  # Skip info-level nuclei findings
+                    result.findings.append(BountyFinding(
+                        target_id=0,
+                        vuln_type=f"nuclei_{nf.get('template_id', 'unknown')}",
+                        severity=sev,
+                        cvss=cvss,
+                        confidence=0.85,
+                        title=f"{nf.get('name', 'Nuclei finding')} on {url}",
+                        description=nf.get("description", "")[:2000],
+                        poc=nf.get("matched_at", url),
+                    ))
+        except Exception as exc:
+            result.errors.append(f"nuclei_scan: {exc}")
 
         log.info(
             "scan_complete",
