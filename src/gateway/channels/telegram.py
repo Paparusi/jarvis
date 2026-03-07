@@ -67,6 +67,30 @@ from src.tools.recon import (
     subdomain_enum_tool, http_headers_tool, cve_lookup_tool,
     reverse_dns_tool, tech_detect_tool,
 )
+from src.tools.osint import (
+    google_dork_tool, username_search_tool, email_harvest_tool,
+    wayback_lookup_tool, github_leaks_tool,
+)
+from src.tools.web_attack import (
+    dir_bruteforce_tool, sqli_test_tool, xss_scan_tool,
+    cors_check_tool, waf_detect_tool, lfi_test_tool, header_audit_tool,
+)
+from src.tools.crypto_attack import (
+    hash_identify_tool, hash_crack_tool, cipher_decode_tool,
+    encoding_chain_tool,
+)
+from src.tools.exploit import (
+    exploit_search_tool, reverse_shell_gen_tool, payload_encode_tool,
+    gtfobins_lookup_tool,
+)
+from src.tools.forensics import (
+    file_metadata_tool, stego_detect_tool, ioc_extract_tool,
+    log_analyze_tool,
+)
+from src.tools.threat_intel import (
+    virustotal_lookup_tool, abuseipdb_check_tool,
+    malware_hash_check_tool, shodan_search_tool,
+)
 from src.tools.code_analysis import (
     ast_analyze_tool, complexity_check_tool, dependency_graph_tool,
     code_search_tool, diff_summary_tool,
@@ -238,6 +262,24 @@ class TelegramAdapter:
             analyze_image_tool, ocr_tool,
             ingest_document_tool, query_documents_tool,
             tts_tool,
+            # OSINT
+            google_dork_tool, username_search_tool, email_harvest_tool,
+            wayback_lookup_tool, github_leaks_tool,
+            # Web Attack
+            dir_bruteforce_tool, sqli_test_tool, xss_scan_tool,
+            cors_check_tool, waf_detect_tool, lfi_test_tool, header_audit_tool,
+            # Crypto Attack
+            hash_identify_tool, hash_crack_tool, cipher_decode_tool,
+            encoding_chain_tool,
+            # Exploit
+            exploit_search_tool, reverse_shell_gen_tool, payload_encode_tool,
+            gtfobins_lookup_tool,
+            # Forensics
+            file_metadata_tool, stego_detect_tool, ioc_extract_tool,
+            log_analyze_tool,
+            # Threat Intelligence
+            virustotal_lookup_tool, abuseipdb_check_tool,
+            malware_hash_check_tool, shodan_search_tool,
         ]:
             self._tool_registry.register(tool)
 
