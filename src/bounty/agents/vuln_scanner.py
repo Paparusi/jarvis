@@ -72,6 +72,8 @@ class VulnScanAgent(BaseHunterAgent):
         if alive_hosts:
             tasks.append(self._nuclei_scan(alive_hosts, findings, errors))
             tasks.append(self._ffuf_scan(alive_hosts, findings, errors))
+            tasks.append(self._cors_scan(alive_hosts, findings, errors))
+            tasks.append(self._api_misconfig_scan(alive_hosts, findings, errors))
         if endpoints:
             tasks.append(self._open_redirect_scan(endpoints, findings, errors))
 
@@ -373,3 +375,179 @@ class VulnScanAgent(BaseHunterAgent):
                     )
             except Exception as e:
                 errors.append(f"redirect {endpoint}: {e}")
+
+    async def _cors_scan(
+        self,
+        alive_hosts: list[dict],
+        findings: list[BountyFinding],
+        errors: list[str],
+    ) -> None:
+        """Check top hosts for CORS misconfiguration ($500-3000 bounty)."""
+        for host in alive_hosts[:5]:
+            url = host.get("url", "")
+            if not url:
+                continue
+            try:
+                result = await self.registry.execute("cors_check", url=url)
+                if not result.success:
+                    continue
+                vulns = result.data.get("vulnerabilities", [])
+                for v in vulns:
+                    vuln_name = v.get("type", "cors_misconfiguration")
+                    findings.append(
+                        BountyFinding(
+                            target_id=0,
+                            vuln_type="cors_misconfiguration",
+                            severity="HIGH",
+                            cvss=7.5,
+                            confidence=0.85,
+                            title=f"CORS misconfiguration on {url}",
+                            description=(
+                                f"{vuln_name}: {v.get('description', 'CORS policy allows '
+                                'untrusted origins to read responses')}. "
+                                f"Origin tested: {v.get('origin', 'N/A')}"
+                            ),
+                            steps_to_reproduce=(
+                                f"1. Send request to {url} with Origin: https://evil.com\n"
+                                f"2. Check Access-Control-Allow-Origin header in response\n"
+                                f"3. Observe it reflects the attacker's origin"
+                            ),
+                            poc=f"curl -H 'Origin: https://evil.com' {url} -v",
+                            impact=(
+                                "CORS misconfiguration allows any website to read "
+                                "authenticated responses. Attacker can steal user data, "
+                                "tokens, and perform actions on behalf of the victim."
+                            ),
+                            suggested_fix=(
+                                "Restrict Access-Control-Allow-Origin to a whitelist "
+                                "of trusted domains. Never reflect the Origin header "
+                                "directly. Avoid using wildcard (*) with credentials."
+                            ),
+                        )
+                    )
+            except Exception as e:
+                errors.append(f"cors {url}: {e}")
+
+    async def _api_misconfig_scan(
+        self,
+        alive_hosts: list[dict],
+        findings: list[BountyFinding],
+        errors: list[str],
+    ) -> None:
+        """Check for API misconfigurations: GraphQL introspection, debug mode.
+
+        GraphQL introspection enabled = $500-2000 on most programs.
+        Debug endpoints exposed = $300-1000.
+        """
+        for host in alive_hosts[:5]:
+            url = host.get("url", "")
+            if not url:
+                continue
+
+            base = url.rstrip("/")
+
+            # 1. GraphQL introspection check
+            for gql_path in ("/graphql", "/graphiql", "/api/graphql", "/v1/graphql"):
+                try:
+                    gql_url = base + gql_path
+                    async with httpx_client.AsyncClient(
+                        timeout=10, verify=False, follow_redirects=True,
+                    ) as client:
+                        resp = await client.post(
+                            gql_url,
+                            json={"query": "{__schema{types{name}}}"},
+                            headers={
+                                "User-Agent": _USER_AGENT,
+                                "Content-Type": "application/json",
+                            },
+                        )
+                        if resp.status_code == 200:
+                            body = resp.text[:2000].lower()
+                            if "__schema" in body and "types" in body:
+                                findings.append(
+                                    BountyFinding(
+                                        target_id=0,
+                                        vuln_type="graphql_introspection",
+                                        severity="MEDIUM",
+                                        cvss=5.3,
+                                        confidence=0.95,
+                                        title=f"GraphQL introspection enabled on {gql_url}",
+                                        description=(
+                                            "GraphQL introspection is enabled, exposing the "
+                                            "full API schema including types, queries, mutations, "
+                                            "and potentially sensitive fields."
+                                        ),
+                                        steps_to_reproduce=(
+                                            f'1. Send POST to {gql_url}\n'
+                                            f'2. Body: {{"query": "{{__schema{{types{{name}}}}}}"}} \n'
+                                            f"3. Observe full schema returned"
+                                        ),
+                                        poc=gql_url,
+                                        impact=(
+                                            "Attackers can enumerate all API operations, "
+                                            "discover internal fields, and craft targeted "
+                                            "attacks against the API."
+                                        ),
+                                        suggested_fix=(
+                                            "Disable introspection in production. "
+                                            "For Apollo: introspection: false. "
+                                            "For graphql-java: use IntrospectionDisabler."
+                                        ),
+                                    )
+                                )
+                                break  # Found one, no need to try other paths
+                except Exception:
+                    pass
+
+            # 2. Debug endpoint checks
+            for debug_path, sig in [
+                ("/debug/vars", '"cmdline"'),
+                ("/debug/pprof", "Types of profiles"),
+                ("/_debug", "debug"),
+                ("/actuator", '"_links"'),
+                ("/actuator/env", '"propertySources"'),
+                ("/__debug__", "debug"),
+            ]:
+                try:
+                    debug_url = base + debug_path
+                    async with httpx_client.AsyncClient(
+                        timeout=8, verify=False, follow_redirects=True,
+                    ) as client:
+                        resp = await client.get(
+                            debug_url,
+                            headers={"User-Agent": _USER_AGENT},
+                        )
+                        if resp.status_code == 200:
+                            body = resp.text[:3000].lower()
+                            if sig.lower() in body:
+                                findings.append(
+                                    BountyFinding(
+                                        target_id=0,
+                                        vuln_type="debug_endpoint_exposed",
+                                        severity="HIGH",
+                                        cvss=7.5,
+                                        confidence=0.90,
+                                        title=f"Debug endpoint exposed: {debug_path} on {url}",
+                                        description=(
+                                            f"Debug endpoint {debug_path} is accessible and "
+                                            f"returns internal application information."
+                                        ),
+                                        steps_to_reproduce=(
+                                            f"1. Navigate to {debug_url}\n"
+                                            f"2. Observe debug information in response"
+                                        ),
+                                        poc=debug_url,
+                                        impact=(
+                                            "Debug endpoints leak internal state, "
+                                            "environment variables, memory profiles, "
+                                            "and system configuration to attackers."
+                                        ),
+                                        suggested_fix=(
+                                            f"Disable or restrict access to {debug_path} "
+                                            "in production. Use authentication or IP "
+                                            "whitelisting for debug endpoints."
+                                        ),
+                                    )
+                                )
+                except Exception:
+                    pass

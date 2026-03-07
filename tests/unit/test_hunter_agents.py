@@ -574,6 +574,8 @@ class TestVulnScanAgent:
 
         registry.execute = AsyncMock(side_effect=_mock_exec)
         agent = VulnScanAgent(registry)
+        # Stub out direct HTTP methods to avoid real requests in tests
+        agent._api_misconfig_scan = AsyncMock()
         result = await agent.run({
             "alive_hosts": [{"url": "https://test.com", "priority": 5}],
             "endpoints": ["https://test.com/login?next="],
@@ -605,10 +607,13 @@ class TestVulnScanAgent:
                 })
             if name == "ffuf_fuzz":
                 return _tool_result(data={"found": []})
+            if name == "cors_check":
+                return _tool_result(data={"vulnerabilities": []})
             return _tool_result(data={})
 
         registry.execute = AsyncMock(side_effect=_mock_exec)
         agent = VulnScanAgent(registry)
+        agent._api_misconfig_scan = AsyncMock()
         result = await agent.run({
             "alive_hosts": [{"url": "https://test.com", "priority": 5}],
             "endpoints": [],
@@ -636,10 +641,13 @@ class TestVulnScanAgent:
                 return _tool_result(data={
                     "vulnerable": False, "findings": [],
                 })
+            if name == "cors_check":
+                return _tool_result(data={"vulnerabilities": []})
             return _tool_result()
 
         registry.execute = AsyncMock(side_effect=_mock_exec)
         agent = VulnScanAgent(registry)
+        agent._api_misconfig_scan = AsyncMock()
         result = await agent.run({
             "alive_hosts": [{"url": "https://test.com", "priority": 5}],
             "endpoints": ["https://test.com/login"],
@@ -673,6 +681,7 @@ class TestVulnScanAgent:
 
         registry.execute = AsyncMock(side_effect=_mock_exec)
         agent = VulnScanAgent(registry)
+        agent._api_misconfig_scan = AsyncMock()
         result = await agent.run({
             "alive_hosts": [{"url": "https://test.com", "priority": 5}],
             "endpoints": [],
@@ -697,10 +706,13 @@ class TestVulnScanAgent:
                 })
             if name == "nuclei_scan":
                 return _tool_result(data={"count": 0, "findings": []})
+            if name == "cors_check":
+                return _tool_result(data={"vulnerabilities": []})
             return _tool_result(data={})
 
         registry.execute = AsyncMock(side_effect=_mock_exec)
         agent = VulnScanAgent(registry)
+        agent._api_misconfig_scan = AsyncMock()
         result = await agent.run({
             "alive_hosts": [{"url": "https://test.com", "priority": 5}],
             "endpoints": [],
@@ -725,10 +737,13 @@ class TestVulnScanAgent:
                 })
             if name == "nuclei_scan":
                 return _tool_result(data={"count": 0, "findings": []})
+            if name == "cors_check":
+                return _tool_result(data={"vulnerabilities": []})
             return _tool_result(data={})
 
         registry.execute = AsyncMock(side_effect=_mock_exec)
         agent = VulnScanAgent(registry)
+        agent._api_misconfig_scan = AsyncMock()
         # Mock _get_baseline_size to return SPA-like size
         agent._get_baseline_size = AsyncMock(return_value=50000)
         # Mock _verify_body to not make real HTTP requests
