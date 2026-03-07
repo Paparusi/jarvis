@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sqlite3
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 from src.bounty.models import BountyFinding, BountyTarget, FindingStatus, TargetState
 from src.bounty.monitor import ProgramMonitor
@@ -25,6 +27,39 @@ from src.utils.logging import get_logger
 log = get_logger("bounty.pipeline")
 
 NotifyCallback = Callable[[BountyFinding, str], Any]
+
+_VALID_HOSTNAME = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*$")
+
+
+def _normalize_domain(raw: str) -> str | None:
+    """Normalize a scope string into a scannable hostname.
+
+    Handles: 'http://twilio.com/blog', 'https://x.com?q=1', '*.foo.com',
+    'static*.foo.com', 'www.example.com'.
+    Returns None for unscannable entries (wildcards in middle, IPs, etc.).
+    """
+    raw = raw.strip()
+
+    # Strip protocol if present
+    if "://" in raw:
+        parsed = urlparse(raw)
+        hostname = parsed.hostname or ""
+    else:
+        # Could be 'domain.com/path' or just 'domain.com'
+        hostname = raw.split("/")[0].split("?")[0].split("#")[0]
+
+    # Strip wildcard prefix
+    hostname = hostname.lstrip("*.")
+
+    # Skip entries with wildcards in the middle (static*.twilio.com)
+    if "*" in hostname:
+        return None
+
+    # Validate
+    if not hostname or not _VALID_HOSTNAME.match(hostname):
+        return None
+
+    return hostname.lower()
 
 
 class BountyPipeline:
@@ -65,7 +100,10 @@ class BountyPipeline:
         Also scans discovered subdomains (up to 5) for broader coverage.
         Returns a list of reportable, deduplicated findings.
         """
-        domain = target.domain.lstrip("*.")
+        domain = _normalize_domain(target.domain)
+        if not domain:
+            log.warning("unscannable_domain", raw=target.domain)
+            return []
         url = f"https://{domain}"
 
         # 1. Recon on main domain

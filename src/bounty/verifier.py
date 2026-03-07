@@ -19,6 +19,7 @@ _VULN_TO_TOOL: dict[str, str] = {
     "cors": "cors_check",
     "headers": "header_audit",
     "missing_headers": "header_audit",
+    "insecure_cookies": "header_audit",
 }
 
 _SEVERITY_MULTIPLIER: dict[str, tuple[float, float]] = {
