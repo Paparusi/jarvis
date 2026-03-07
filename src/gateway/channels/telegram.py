@@ -180,6 +180,7 @@ class TelegramAdapter:
             self._swarm = app.swarm
             self._proactive = app.proactive              # Must call app.init_proactive() first
             self._mcp_bridge = app._mcp_bridge
+            self._bounty_pipeline = app.bounty_pipeline
 
             # Wire dreamtime callback if dreamtime was initialized
             if self._dreamtime is not None:
@@ -269,6 +270,9 @@ class TelegramAdapter:
             # MCP Bridge — lazy connect (no blocking init)
             self._mcp_bridge = None
 
+            # Bug Bounty Pipeline — not available in legacy path
+            self._bounty_pipeline = None
+
         # Subscribe event bus — DataCollector auto-logs via events (BOTH paths)
         self._bus.subscribe(EventType.TOOL_CALLED, self._on_tool_called)
 
@@ -303,6 +307,7 @@ class TelegramAdapter:
         self._app.add_handler(CommandHandler("eval", self._handle_eval))
         self._app.add_handler(CommandHandler("digest", self._handle_digest))
         self._app.add_handler(CommandHandler("pentest", self._handle_pentest))
+        self._app.add_handler(CommandHandler("bounty", self._handle_bounty))
         self._app.add_handler(CallbackQueryHandler(self._handle_feedback))
         self._app.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message)
@@ -2043,6 +2048,143 @@ class TelegramAdapter:
         except Exception as e:
             log.error("pentest_command_error", target=target, error=str(e))
             await status_msg.edit_text(f"❌ Pentest error: {e}")
+
+    async def _handle_bounty(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """/bounty [subcommand] — Bug Bounty Pipeline management."""
+        if not self._is_authorized(update):
+            return
+
+        if self._bounty_pipeline is None:
+            await update.message.reply_text("❌ Bug Bounty Pipeline chưa được khởi tạo.")
+            return
+
+        text = (update.message.text or "").replace("/bounty", "").strip()
+        parts = text.split()
+        subcmd = parts[0] if parts else "status"
+        args = parts[1:] if len(parts) > 1 else []
+
+        if subcmd == "status":
+            stats = self._bounty_pipeline.stats()
+            targets = stats["targets"]
+            findings = stats["findings"]
+            running = "🟢 Running" if stats["running"] else "🔴 Stopped"
+            msg = (
+                f"🎯 *Bug Bounty Pipeline*\n\n"
+                f"Status: {running}\n"
+                f"Programs: {stats['programs']}\n"
+                f"Targets: {targets.get('queued', 0)} queued, {targets.get('scanning', 0)} scanning, {targets.get('scanned', 0)} scanned\n"
+                f"Findings: {findings['pending']} pending, {findings['total']} total\n"
+                f"Earnings: ${stats['earnings_usd']:.2f}\n\n"
+                f"Commands: `start`, `stop`, `programs`, `findings`, `review <id>`, `approve <id>`, `reject <id>`, `earnings`"
+            )
+            await update.message.reply_text(msg, parse_mode="Markdown")
+
+        elif subcmd == "start":
+            if self._bounty_pipeline.is_running:
+                await update.message.reply_text("⚠️ Pipeline đang chạy rồi.")
+                return
+            await self._bounty_pipeline.start(interval_hours=6)
+            await update.message.reply_text("🚀 Bug Bounty Pipeline đã bắt đầu! Scan mỗi 6 giờ.")
+
+        elif subcmd == "stop":
+            if not self._bounty_pipeline.is_running:
+                await update.message.reply_text("⚠️ Pipeline chưa chạy.")
+                return
+            await self._bounty_pipeline.stop()
+            await update.message.reply_text("🛑 Bug Bounty Pipeline đã dừng.")
+
+        elif subcmd == "programs":
+            programs = self._bounty_pipeline.monitor.get_active_programs()
+            if not programs:
+                await update.message.reply_text("📭 Chưa có program nào.")
+                return
+            lines = ["🏢 *Active Programs*\n"]
+            for p in programs[:20]:
+                bounty = f"${p.bounty_low}-${p.bounty_high}" if p.bounty_high else "N/A"
+                lines.append(f"• *{p.name}* ({p.platform})\n  Bounty: {bounty} | Priority: {p.priority_score:.2f}")
+            await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+        elif subcmd == "findings":
+            findings = self._bounty_pipeline.get_pending_findings()
+            if not findings:
+                await update.message.reply_text("📭 Không có finding nào đang chờ.")
+                return
+            lines = ["🔍 *Pending Findings*\n"]
+            for f in findings[:20]:
+                lines.append(
+                    f"*#{f.id}* — {f.title}\n"
+                    f"  {f.severity} (CVSS {f.cvss}) | Confidence: {f.confidence:.0%} | {f.estimated_bounty_str}"
+                )
+            await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+        elif subcmd == "review":
+            if not args:
+                await update.message.reply_text("Usage: `/bounty review <id>`", parse_mode="Markdown")
+                return
+            try:
+                finding_id = int(args[0])
+            except ValueError:
+                await update.message.reply_text("❌ ID phải là số.")
+                return
+            # Look up finding
+            row = self._bounty_pipeline.conn.execute(
+                "SELECT * FROM bounty_findings WHERE id = ?", (finding_id,)
+            ).fetchone()
+            if not row:
+                await update.message.reply_text(f"❌ Finding #{finding_id} không tìm thấy.")
+                return
+            finding = self._bounty_pipeline._row_to_finding(row)
+            # Get target domain
+            t_row = self._bounty_pipeline.conn.execute(
+                "SELECT domain FROM bounty_targets WHERE id = ?", (finding.target_id,)
+            ).fetchone()
+            domain = t_row["domain"] if t_row else "unknown"
+            report = self._bounty_pipeline.reporter.generate_hackerone(finding, domain)
+            # Truncate for Telegram (4096 char limit)
+            if len(report) > 4000:
+                report = report[:4000] + "\n...(truncated)"
+            await update.message.reply_text(report, parse_mode="Markdown")
+
+        elif subcmd == "approve":
+            if not args:
+                await update.message.reply_text("Usage: `/bounty approve <id>`", parse_mode="Markdown")
+                return
+            try:
+                finding_id = int(args[0])
+            except ValueError:
+                await update.message.reply_text("❌ ID phải là số.")
+                return
+            self._bounty_pipeline.update_finding_status(finding_id, "approved")
+            await update.message.reply_text(f"✅ Finding #{finding_id} đã được approved.")
+
+        elif subcmd == "reject":
+            if not args:
+                await update.message.reply_text("Usage: `/bounty reject <id>`", parse_mode="Markdown")
+                return
+            try:
+                finding_id = int(args[0])
+            except ValueError:
+                await update.message.reply_text("❌ ID phải là số.")
+                return
+            self._bounty_pipeline.update_finding_status(finding_id, "rejected")
+            await update.message.reply_text(f"❌ Finding #{finding_id} đã bị rejected.")
+
+        elif subcmd == "earnings":
+            row = self._bounty_pipeline.conn.execute(
+                "SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as cnt FROM bounty_earnings"
+            ).fetchone()
+            total = row["total"] if row else 0
+            count = row["cnt"] if row else 0
+            await update.message.reply_text(
+                f"💰 *Earnings*\n\nTotal: ${total:.2f}\nBounties paid: {count}",
+                parse_mode="Markdown",
+            )
+
+        else:
+            await update.message.reply_text(
+                "Usage: `/bounty [status|start|stop|programs|findings|review|approve|reject|earnings]`",
+                parse_mode="Markdown",
+            )
 
     async def _handle_digest(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """/digest [topics] — Generate daily news digest on demand."""

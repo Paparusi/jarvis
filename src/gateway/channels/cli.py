@@ -59,6 +59,7 @@ class CLIAdapter:
             self._memory_consolidator = app.memory_consolidator
             self._dreamer = app.dreamer
             self._evolver = app.evolver
+            self._bounty_pipeline = app.bounty_pipeline
         else:
             # Legacy path — backward compatible standalone init
             self._app = None
@@ -92,6 +93,7 @@ class CLIAdapter:
             self._memory_consolidator = MemoryConsolidator(self._memory.semantic)
             self._dreamer = Dreamer(collector=self._collector, skill_registry=self._skill_registry)
             self._evolver = SkillEvolver(self._skill_registry, self._skill_loader)
+            self._bounty_pipeline = None
 
         # CLI-specific state (always initialized regardless of path)
         self._user_id = "cli_user"
@@ -135,7 +137,7 @@ class CLIAdapter:
 ╚══════════════════════════════════════╝{_RESET}
 
   {_DIM}Skills: {skills_count} | Tools: {tools_count} | Memory: ON{_RESET}
-  {_DIM}Commands: /status /stats /profile /health /memory /skills /train /eval /digest /pentest /dreamtime /reset /quit{_RESET}
+  {_DIM}Commands: /status /stats /profile /health /memory /skills /train /eval /digest /pentest /bounty /dreamtime /reset /quit{_RESET}
   {_DIM}Gõ tin nhắn rồi Enter để chat.{_RESET}
 """)
 
@@ -183,6 +185,9 @@ class CLIAdapter:
 
         elif cmd.startswith("/pentest"):
             await self._cmd_pentest(cmd)
+
+        elif cmd.startswith("/bounty"):
+            await self._cmd_bounty(cmd)
 
         elif cmd == "/reset":
             self._session.messages.clear()
@@ -719,6 +724,131 @@ Examples:
         except Exception as e:
             print(f"{_RED}❌ Pentest error: {e}{_RESET}")
 
+    async def _cmd_bounty(self, cmd: str) -> None:
+        """Bug Bounty Pipeline management."""
+        if self._bounty_pipeline is None:
+            print(f"{_RED}❌ Bug Bounty Pipeline chưa được khởi tạo.{_RESET}")
+            return
+
+        args = cmd.replace("/bounty", "").strip().split()
+        subcmd = args[0] if args else "status"
+        params = args[1:] if len(args) > 1 else []
+
+        if subcmd == "status":
+            stats = self._bounty_pipeline.stats()
+            targets = stats["targets"]
+            findings = stats["findings"]
+            running = f"{_GREEN}Running{_RESET}" if stats["running"] else f"{_RED}Stopped{_RESET}"
+            print(f"""
+{_BOLD}🎯 Bug Bounty Pipeline{_RESET}
+
+  Status: {running}
+  Programs: {stats['programs']}
+  Targets: {targets.get('queued', 0)} queued, {targets.get('scanning', 0)} scanning, {targets.get('scanned', 0)} scanned
+  Findings: {findings['pending']} pending, {findings['total']} total
+  Earnings: ${stats['earnings_usd']:.2f}
+
+  {_DIM}Subcommands: status, start, stop, programs, findings, review <id>, approve <id>, reject <id>, earnings{_RESET}
+""")
+
+        elif subcmd == "start":
+            if self._bounty_pipeline.is_running:
+                print(f"{_YELLOW}⚠️ Pipeline đang chạy rồi.{_RESET}")
+                return
+            await self._bounty_pipeline.start(interval_hours=6)
+            print(f"{_GREEN}🚀 Bug Bounty Pipeline đã bắt đầu! Scan mỗi 6 giờ.{_RESET}")
+
+        elif subcmd == "stop":
+            if not self._bounty_pipeline.is_running:
+                print(f"{_YELLOW}⚠️ Pipeline chưa chạy.{_RESET}")
+                return
+            await self._bounty_pipeline.stop()
+            print(f"{_GREEN}🛑 Bug Bounty Pipeline đã dừng.{_RESET}")
+
+        elif subcmd == "programs":
+            programs = self._bounty_pipeline.monitor.get_active_programs()
+            if not programs:
+                print(f"{_YELLOW}📭 Chưa có program nào.{_RESET}")
+                return
+            print(f"\n{_BOLD}🏢 Active Programs{_RESET}\n")
+            for p in programs[:20]:
+                bounty = f"${p.bounty_low}-${p.bounty_high}" if p.bounty_high else "N/A"
+                print(f"  • {_BOLD}{p.name}{_RESET} ({p.platform})")
+                print(f"    Bounty: {bounty} | Priority: {p.priority_score:.2f}")
+
+        elif subcmd == "findings":
+            findings = self._bounty_pipeline.get_pending_findings()
+            if not findings:
+                print(f"{_YELLOW}📭 Không có finding nào đang chờ.{_RESET}")
+                return
+            print(f"\n{_BOLD}🔍 Pending Findings{_RESET}\n")
+            for f in findings[:20]:
+                print(f"  {_BOLD}#{f.id}{_RESET} — {f.title}")
+                print(f"    {f.severity} (CVSS {f.cvss}) | Confidence: {f.confidence:.0%} | {f.estimated_bounty_str}")
+
+        elif subcmd == "review":
+            if not params:
+                print(f"{_DIM}Usage: /bounty review <id>{_RESET}")
+                return
+            try:
+                finding_id = int(params[0])
+            except ValueError:
+                print(f"{_RED}❌ ID phải là số.{_RESET}")
+                return
+            row = self._bounty_pipeline.conn.execute(
+                "SELECT * FROM bounty_findings WHERE id = ?", (finding_id,)
+            ).fetchone()
+            if not row:
+                print(f"{_RED}❌ Finding #{finding_id} không tìm thấy.{_RESET}")
+                return
+            finding = self._bounty_pipeline._row_to_finding(row)
+            t_row = self._bounty_pipeline.conn.execute(
+                "SELECT domain FROM bounty_targets WHERE id = ?", (finding.target_id,)
+            ).fetchone()
+            domain = t_row["domain"] if t_row else "unknown"
+            report = self._bounty_pipeline.reporter.generate_hackerone(finding, domain)
+            print(f"\n{report}")
+
+        elif subcmd == "approve":
+            if not params:
+                print(f"{_DIM}Usage: /bounty approve <id>{_RESET}")
+                return
+            try:
+                finding_id = int(params[0])
+            except ValueError:
+                print(f"{_RED}❌ ID phải là số.{_RESET}")
+                return
+            self._bounty_pipeline.update_finding_status(finding_id, "approved")
+            print(f"{_GREEN}✅ Finding #{finding_id} đã được approved.{_RESET}")
+
+        elif subcmd == "reject":
+            if not params:
+                print(f"{_DIM}Usage: /bounty reject <id>{_RESET}")
+                return
+            try:
+                finding_id = int(params[0])
+            except ValueError:
+                print(f"{_RED}❌ ID phải là số.{_RESET}")
+                return
+            self._bounty_pipeline.update_finding_status(finding_id, "rejected")
+            print(f"{_RED}❌ Finding #{finding_id} đã bị rejected.{_RESET}")
+
+        elif subcmd == "earnings":
+            row = self._bounty_pipeline.conn.execute(
+                "SELECT COALESCE(SUM(amount), 0) as total, COUNT(*) as cnt FROM bounty_earnings"
+            ).fetchone()
+            total = row["total"] if row else 0
+            count = row["cnt"] if row else 0
+            print(f"""
+{_BOLD}💰 Earnings{_RESET}
+
+  Total: ${total:.2f}
+  Bounties paid: {count}
+""")
+
+        else:
+            print(f"{_DIM}Usage: /bounty [status|start|stop|programs|findings|review|approve|reject|earnings]{_RESET}")
+
     def _cmd_help(self) -> None:
         print(f"""
 {_BOLD}JARVIS CLI Commands:{_RESET}
@@ -734,6 +864,7 @@ Examples:
   /eval      — Benchmark model quality
   /digest    — Daily news digest (topics từ sở thích)
   /pentest   — Pentest tự động: /pentest <target> [scope]
+  /bounty    — Bug Bounty Pipeline: /bounty [status|start|stop|programs|findings|review|approve|reject|earnings]
   /dreamtime — Chạy Dreamtime cycle
   /reset     — Reset trò chuyện
   /quit      — Thoát

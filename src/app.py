@@ -81,6 +81,7 @@ class JarvisApp:
         self.decomposer = None
         self.swarm = None
         self._mcp_bridge = None
+        self.bounty_pipeline = None
 
         log.info("jarvis_app_init_done")
 
@@ -129,6 +130,14 @@ class JarvisApp:
             user_id=uid,
         )
 
+    def init_bounty(self) -> None:
+        """Initialize Bug Bounty Pipeline."""
+        from src.bounty.pipeline import BountyPipeline
+        from src.bounty.store import get_bounty_connection
+
+        conn = get_bounty_connection()
+        self.bounty_pipeline = BountyPipeline(conn, self.tool_registry)
+
     async def connect_mcp(self) -> int:
         """Connect MCP servers and register their tools. Returns tool count."""
         try:
@@ -145,6 +154,8 @@ class JarvisApp:
     async def shutdown(self) -> None:
         """Graceful shutdown of all subsystems."""
         log.info("jarvis_app_shutdown")
+        if self.bounty_pipeline and self.bounty_pipeline.is_running:
+            await self.bounty_pipeline.stop()
         if self.dreamtime:
             await self.dreamtime.stop()
         if self._mcp_bridge:

@@ -40,6 +40,7 @@ async def run_telegram() -> None:
     app.init_health()
     app.init_swarm()
     app.init_proactive()
+    app.init_bounty()
 
     # Connect MCP servers (async)
     await app.connect_mcp()
@@ -102,6 +103,7 @@ async def run_cli() -> None:
 
     app = JarvisApp()
     app.init_dreamtime()
+    app.init_bounty()
 
     from src.gateway.channels.cli import CLIAdapter
 
