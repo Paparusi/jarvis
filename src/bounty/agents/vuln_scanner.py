@@ -158,23 +158,24 @@ class VulnScanAgent(BaseHunterAgent):
         findings: list[BountyFinding],
         errors: list[str],
     ) -> None:
-        """Run nuclei template scans on top alive hosts."""
-        for host in alive_hosts[:5]:
-            url = host.get("url", "")
-            if not url:
-                continue
+        """Run nuclei template scans on top alive hosts (parallel)."""
+        urls = [h.get("url", "") for h in alive_hosts[:3] if h.get("url")]
+        if not urls:
+            return
+
+        async def _scan_one(url: str) -> None:
             try:
                 result = await self.registry.execute(
                     "nuclei_scan",
                     url=url,
-                    templates="cves,misconfigurations,exposed-panels,takeovers",
+                    templates="exposed-panels,takeovers,misconfigurations",
                 )
                 if not result.success or result.data.get("count", 0) == 0:
-                    continue
+                    return
                 for nf in result.data.get("findings", []):
                     severity = nf.get("severity", "info").upper()
                     if severity == "INFO":
-                        continue  # Skip informational findings
+                        continue
                     findings.append(
                         BountyFinding(
                             target_id=0,
@@ -191,6 +192,8 @@ class VulnScanAgent(BaseHunterAgent):
                     )
             except Exception as e:
                 errors.append(f"nuclei {url}: {e}")
+
+        await asyncio.gather(*[_scan_one(u) for u in urls], return_exceptions=True)
 
     async def _ffuf_scan(
         self,

@@ -377,7 +377,7 @@ class TestCrawlerAgent:
 
     @pytest.mark.asyncio
     async def test_crawler_max_hosts(self, registry):
-        """Crawler caps at top 10 hosts by priority."""
+        """Crawler caps at top 5 hosts by priority."""
         # Build 15 hosts
         hosts = [
             {"url": f"https://host{i}.test.com", "priority": 15 - i}
@@ -400,8 +400,8 @@ class TestCrawlerAgent:
         agent = CrawlerAgent(registry)
         await agent.run({"alive_hosts": hosts})
 
-        # katana_crawl should only be invoked for the first 10 hosts
-        assert len(call_urls) == 10
+        # katana_crawl should only be invoked for the first 5 hosts
+        assert len(call_urls) == 5
 
     @pytest.mark.asyncio
     async def test_crawler_empty_hosts(self, registry):

@@ -254,6 +254,9 @@ async def httpx_probe(targets: str) -> ToolResult:
                 error=f"Invalid target: contains disallowed characters: {line[:80]}",
             )
 
+    # Dynamic timeout: base 120s + 0.5s per target, capped at 360s
+    dynamic_timeout = min(120 + len(target_lines) // 2, 360)
+
     tmpfile = None
     try:
         # Write targets to temp file
@@ -267,15 +270,15 @@ async def httpx_probe(targets: str) -> ToolResult:
         stdout, stderr, rc = await _run_binary(
             [
                 binary, "-l", tmpfile.name, "-json", "-silent",
-                "-sc", "-title", "-td", "-cl", "-fr", "-threads", "20",
+                "-sc", "-title", "-td", "-cl", "-fr", "-threads", "30",
             ],
-            timeout=170,
+            timeout=dynamic_timeout,
         )
     except asyncio.TimeoutError:
         elapsed = int((time.monotonic() - start) * 1000)
         return ToolResult(
             success=False, output="",
-            error="httpx timed out after 170s",
+            error=f"httpx timed out after {dynamic_timeout}s",
             execution_time_ms=elapsed,
         )
     except Exception as e:
@@ -372,7 +375,7 @@ async def katana_crawl(url: str, depth: int = 2) -> ToolResult:
         stdout, stderr, rc = await _run_binary(
             [
                 binary, "-u", url, "-d", str(depth),
-                "-json", "-silent", "-js-crawl", "-known-files", "all",
+                "-jsonl", "-silent", "-js-crawl", "-known-files", "all",
                 "-timeout", "10",
             ],
             timeout=170,

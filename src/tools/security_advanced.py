@@ -460,8 +460,10 @@ async def nuclei_scan(
         "-jsonl",
         "-silent",
         "-no-color",
-        "-timeout", "30",
-        "-rate-limit", "50",
+        "-timeout", "15",
+        "-rate-limit", "150",
+        "-bulk-size", "50",
+        "-concurrency", "30",
     ]
 
     try:
@@ -470,7 +472,7 @@ async def nuclei_scan(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=290)
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
         if proc.returncode not in (0, None):
             err_msg = stderr.decode().strip()[:500] if stderr else f"exit code {proc.returncode}"
             elapsed = int((time.time() - start) * 1000)
@@ -481,7 +483,7 @@ async def nuclei_scan(
     except asyncio.TimeoutError:
         elapsed = int((time.time() - start) * 1000)
         return ToolResult(
-            success=False, output="", error="Nuclei scan timed out (290s)",
+            success=False, output="", error="Nuclei scan timed out (120s)",
             execution_time_ms=elapsed,
         )
     except Exception as exc:

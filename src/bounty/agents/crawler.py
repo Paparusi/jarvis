@@ -42,8 +42,8 @@ class CrawlerAgent(BaseHunterAgent):
                 start_time=start,
             )
 
-        # Take top 10 by priority (most interesting hosts first)
-        top_hosts = alive_hosts[:10]
+        # Take top 5 by priority (most interesting hosts first)
+        top_hosts = alive_hosts[:5]
 
         all_urls: set[str] = set()
         all_js: set[str] = set()

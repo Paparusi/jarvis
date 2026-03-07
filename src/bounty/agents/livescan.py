@@ -30,14 +30,18 @@ class LiveScanAgent(BaseHunterAgent):
                 start_time=start,
             )
 
-        # 1. httpx probe all subdomains
-        targets = "\n".join(subdomains)
-        try:
-            result = await self.registry.execute("httpx_probe", targets=targets)
-            alive = result.data.get("alive", []) if result.success else []
-        except Exception as e:
-            alive = []
-            errors.append(f"httpx_probe: {e}")
+        # 1. httpx probe subdomains in batches (200 per batch to avoid timeout)
+        alive = []
+        batch_size = 200
+        for i in range(0, len(subdomains), batch_size):
+            batch = subdomains[i : i + batch_size]
+            targets = "\n".join(batch)
+            try:
+                result = await self.registry.execute("httpx_probe", targets=targets)
+                if result.success:
+                    alive.extend(result.data.get("alive", []))
+            except Exception as e:
+                errors.append(f"httpx_probe batch {i // batch_size}: {e}")
 
         # 2. Classify each host by priority
         for host in alive:

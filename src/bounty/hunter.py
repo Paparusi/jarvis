@@ -76,6 +76,9 @@ class HunterPipeline:
             except Exception:
                 pass
 
+    # Pipeline timeout per mode (seconds)
+    _MODE_TIMEOUTS = {"quick": 120, "full": 480, "deep": 600}
+
     async def hunt(
         self,
         domain: str,
@@ -85,11 +88,12 @@ class HunterPipeline:
         """Run the hunting pipeline on a domain.
 
         Modes:
-            full  — All 7 agents
-            quick — Recon + LiveScan only (fast reconnaissance)
-            deep  — Full pipeline + autonomous deep scan on promising targets
+            full  — All 7 agents (timeout 480s)
+            quick — Recon + LiveScan only (timeout 120s)
+            deep  — Full pipeline + autonomous deep scan (timeout 600s)
         """
         start = time.time()
+        pipeline_timeout = self._MODE_TIMEOUTS.get(mode, 480)
         context: dict[str, Any] = {"domain": domain, "program": program}
         all_agent_results: list[AgentResult] = []
 
@@ -103,10 +107,31 @@ class HunterPipeline:
 
         for agent in agents_to_run:
             agent_name = agent.name
+
+            # Check pipeline-level timeout before each agent
+            elapsed_so_far = time.time() - start
+            if elapsed_so_far > pipeline_timeout:
+                log.warning(
+                    "pipeline_timeout",
+                    domain=domain,
+                    agent=agent_name,
+                    elapsed=int(elapsed_so_far),
+                    timeout=pipeline_timeout,
+                )
+                self._report_progress(
+                    agent_name,
+                    f"Pipeline timeout ({pipeline_timeout}s) — returning partial results",
+                )
+                break
+
             self._report_progress(agent_name, f"Running {agent_name} agent...")
 
             try:
-                result = await agent.run(context)
+                # Per-agent timeout: remaining pipeline time
+                remaining = max(30, pipeline_timeout - int(elapsed_so_far))
+                result = await asyncio.wait_for(
+                    agent.run(context), timeout=remaining,
+                )
                 all_agent_results.append(result)
 
                 # Pass data to next agent via context
@@ -137,6 +162,15 @@ class HunterPipeline:
                     self._report_progress("livescan", "No alive hosts found — stopping")
                     break
 
+            except asyncio.TimeoutError:
+                log.warning("agent_timeout", agent=agent_name, domain=domain)
+                all_agent_results.append(AgentResult(
+                    agent_name=agent_name,
+                    success=False,
+                    errors=[f"{agent_name} timed out"],
+                ))
+                self._report_progress(agent_name, f"{agent_name} timed out — skipping")
+
             except Exception as exc:
                 log.error("agent_failed", agent=agent_name, error=str(exc))
                 all_agent_results.append(AgentResult(
@@ -154,12 +188,20 @@ class HunterPipeline:
         # Deep mode: autonomous deep scan on promising targets
         deep_performed = False
         if mode == "deep":
-            deep_targets = context.get("deep_scan_targets", [])
-            if deep_targets:
-                self._report_progress("deep_scan", f"Deep scanning {len(deep_targets[:3])} targets...")
-                deep_findings = await self._deep_scan(deep_targets[:3], context)
-                all_findings.extend(deep_findings)
-                deep_performed = True
+            remaining = pipeline_timeout - (time.time() - start)
+            if remaining > 60:  # Only deep scan if enough time left
+                deep_targets = context.get("deep_scan_targets", [])
+                if deep_targets:
+                    self._report_progress("deep_scan", f"Deep scanning {len(deep_targets[:3])} targets...")
+                    try:
+                        deep_findings = await asyncio.wait_for(
+                            self._deep_scan(deep_targets[:3], context),
+                            timeout=remaining,
+                        )
+                        all_findings.extend(deep_findings)
+                        deep_performed = True
+                    except asyncio.TimeoutError:
+                        log.warning("deep_scan_timeout", domain=domain)
 
         elapsed = int((time.time() - start) * 1000)
         log.info(
