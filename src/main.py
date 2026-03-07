@@ -1,0 +1,118 @@
+"""JARVIS v2 — Entry Point.
+
+Chat with JARVIS via Telegram or CLI.
+
+Usage:
+    python -m src.main              # Telegram (default)
+    python -m src.main --cli        # CLI mode
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import signal
+import sys
+
+from src.utils.config import get_env, load_config
+from src.utils.logging import get_logger, setup_logging
+
+
+async def run_telegram() -> None:
+    """Run JARVIS with Telegram adapter."""
+    log = get_logger("main")
+
+    token = get_env("TELEGRAM_BOT_TOKEN")
+    if not token:
+        log.error("missing_telegram_token", hint="Set TELEGRAM_BOT_TOKEN in .env file")
+        sys.exit(1)
+
+    api_key = get_env("ANTHROPIC_API_KEY")
+    if not api_key:
+        log.error("missing_api_key", hint="Set ANTHROPIC_API_KEY in .env file")
+        sys.exit(1)
+
+    # Start Prometheus metrics server
+    metrics_server = None
+    try:
+        from src.monitoring.server import MetricsServer
+        metrics_server = MetricsServer(port=9090)
+        await metrics_server.start()
+    except Exception as e:
+        log.warning("metrics_server_failed", error=str(e))
+
+    from src.gateway.channels.telegram import TelegramAdapter
+    adapter = TelegramAdapter(token)
+
+    # Wire metrics server with adapter components
+    if metrics_server:
+        metrics_server._tracker = adapter._router._tracker
+        metrics_server._health_monitor = adapter._health_monitor
+        metrics_server._skill_registry = adapter._skill_registry
+
+    await adapter.start()
+
+    log.info("jarvis_ready", channel="telegram")
+    print("\n🤖 JARVIS is running! Chat with me on Telegram.")
+    print("   Metrics: http://localhost:9090/metrics")
+    print("   Press Ctrl+C to stop.\n")
+
+    stop_event = asyncio.Event()
+
+    def _signal_handler():
+        log.info("shutdown_signal_received")
+        stop_event.set()
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, _signal_handler)
+
+    await stop_event.wait()
+
+    log.info("jarvis_shutting_down")
+    if metrics_server:
+        await metrics_server.stop()
+    await adapter.stop()
+    log.info("jarvis_stopped")
+
+
+async def run_cli() -> None:
+    """Run JARVIS with CLI adapter."""
+    log = get_logger("main")
+
+    api_key = get_env("ANTHROPIC_API_KEY")
+    if not api_key:
+        log.error("missing_api_key", hint="Set ANTHROPIC_API_KEY in .env file")
+        sys.exit(1)
+
+    from src.gateway.channels.cli import CLIAdapter
+    adapter = CLIAdapter()
+
+    log.info("jarvis_ready", channel="cli")
+    await adapter.start()
+
+    log.info("jarvis_stopped", channel="cli")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="JARVIS v2 — Personal AI Agent")
+    parser.add_argument("--cli", action="store_true", help="Run in CLI mode (interactive terminal)")
+    args = parser.parse_args()
+
+    setup_logging()
+    log = get_logger("main")
+
+    config = load_config()
+    log.info("jarvis_starting", version="2.0.0-alpha.1")
+
+    try:
+        if args.cli:
+            asyncio.run(run_cli())
+        else:
+            asyncio.run(run_telegram())
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()

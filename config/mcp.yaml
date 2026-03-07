@@ -1,0 +1,52 @@
+# === MCP Server Configuration ===
+# Define external MCP servers that JARVIS can connect to.
+# Each server provides tools that are auto-discovered and registered.
+
+servers:
+  # Filesystem MCP server — read/write/search files
+  filesystem:
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/home/admin_1/projects"]
+    enabled: true
+
+  # Fetch MCP server — fetch and parse web content
+  fetch:
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-fetch"]
+    enabled: true
+
+  # Memory MCP server — knowledge graph-based persistent memory
+  memory:
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-memory"]
+    enabled: true
+
+  # Sequential Thinking MCP server — structured problem solving
+  sequential-thinking:
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+    enabled: true
+
+  # Playwright MCP server — browser automation by Microsoft
+  # Provides: navigate, click, fill, screenshot, evaluate JS, etc.
+  # Same server that Claude Code uses for web browsing
+  playwright:
+    transport: stdio
+    command: npx
+    args: ["@playwright/mcp@latest"]
+    enabled: true
+
+  # GitHub MCP server — official GitHub integration (v0.31.0)
+  # Provides: repos, issues, PRs, branches, commits, code search, actions
+  # Docs: https://github.com/github/github-mcp-server
+  github:
+    transport: stdio
+    command: ./bin/github-mcp-server
+    args: ["stdio"]
+    env:
+      GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_PERSONAL_ACCESS_TOKEN}"
+    enabled: true

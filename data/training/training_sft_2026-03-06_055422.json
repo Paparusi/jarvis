@@ -1,0 +1,17 @@
+{
+  "stage": "sft",
+  "status": "completed",
+  "started_at": "2026-03-06T05:32:39.146310+00:00",
+  "completed_at": "2026-03-06T05:54:22.649672+00:00",
+  "duration_seconds": 1174.4672709719744,
+  "dataset_size": 267,
+  "metrics": {
+    "mode": "trained",
+    "train_loss": 0.7715201769389358,
+    "train_steps": 102,
+    "adapter_path": "/home/admin_1/projects/jarvis/training/output/sft_adapter",
+    "gguf_path": "/home/admin_1/projects/jarvis/training/output/gguf",
+    "gguf_quantization": "q4_k_m"
+  },
+  "error": ""
+}

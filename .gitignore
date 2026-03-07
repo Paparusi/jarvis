@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Data & Models
+training/data/raw/
+training/data/processed/
+training/data/preferences/
+training/output/
+*.gguf
+*.safetensors
+*.bin
+*.pt
+
+# Runtime data
+data/jarvis.db
+data/dreamtime/
+data/evolution/
+data/adversarial/
+
+# Compiled cache
+unsloth_compiled_cache/
+.pytest_cache/
+
+# Binaries
+bin/
+
+# Logs
+*.log
+
+# Auto-generated skills archive
+workspace/skills/.archive/
+
+# Monitoring data
+monitoring/grafana/data/
+monitoring/prometheus/data/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.override.yml

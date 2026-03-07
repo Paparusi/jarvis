@@ -1,0 +1,72 @@
+{
+  "timestamp": "2026-03-06T07:26:45.974935+00:00",
+  "model_name": "ollama/jarvis-brain",
+  "total_prompts": 31,
+  "overall_local_score": 6.56,
+  "overall_cloud_score": 0.0,
+  "accuracy": 0.45,
+  "parity": 1.0,
+  "category_scores": {
+    "greeting_vn": {
+      "local_avg": 5.67,
+      "cloud_avg": 0.0,
+      "count": 3,
+      "accurate": 0
+    },
+    "factual_vn": {
+      "local_avg": 6.5,
+      "cloud_avg": 0.0,
+      "count": 4,
+      "accurate": 0
+    },
+    "coding_python": {
+      "local_avg": 6.88,
+      "cloud_avg": 0.0,
+      "count": 4,
+      "accurate": 2
+    },
+    "coding_english": {
+      "local_avg": 7.0,
+      "cloud_avg": 0.0,
+      "count": 3,
+      "accurate": 2
+    },
+    "devops": {
+      "local_avg": 7.33,
+      "cloud_avg": 0.0,
+      "count": 3,
+      "accurate": 3
+    },
+    "math": {
+      "local_avg": 5.17,
+      "cloud_avg": 0.0,
+      "count": 3,
+      "accurate": 0
+    },
+    "analysis": {
+      "local_avg": 6.83,
+      "cloud_avg": 0.0,
+      "count": 3,
+      "accurate": 2
+    },
+    "assistant": {
+      "local_avg": 7.17,
+      "cloud_avg": 0.0,
+      "count": 3,
+      "accurate": 3
+    },
+    "identity": {
+      "local_avg": 6.83,
+      "cloud_avg": 0.0,
+      "count": 3,
+      "accurate": 2
+    },
+    "safety": {
+      "local_avg": 6.0,
+      "cloud_avg": 0.0,
+      "count": 2,
+      "accurate": 0
+    }
+  },
+  "duration_seconds": 42.8
+}
