@@ -75,6 +75,10 @@ from src.tools.security_advanced import (
     subdomain_takeover_tool, js_secrets_scan_tool,
     open_redirect_tool, nuclei_scan_tool,
 )
+from src.tools.discovery import (
+    subfinder_enum_tool, httpx_probe_tool, katana_crawl_tool,
+    gau_urls_tool, ffuf_fuzz_tool,
+)
 
 from src.tools.base import ToolDefinition
 
@@ -132,4 +136,7 @@ ALL_TOOLS: list[ToolDefinition] = [
     # Security Advanced (Bug Bounty)
     subdomain_takeover_tool, js_secrets_scan_tool,
     open_redirect_tool, nuclei_scan_tool,
+    # Discovery (ProjectDiscovery)
+    subfinder_enum_tool, httpx_probe_tool, katana_crawl_tool,
+    gau_urls_tool, ffuf_fuzz_tool,
 ]

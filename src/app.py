@@ -82,6 +82,7 @@ class JarvisApp:
         self.swarm = None
         self._mcp_bridge = None
         self.bounty_pipeline = None
+        self.hunter_pipeline = None
 
         log.info("jarvis_app_init_done")
 
@@ -137,6 +138,20 @@ class JarvisApp:
 
         conn = get_bounty_connection()
         self.bounty_pipeline = BountyPipeline(conn, self.tool_registry)
+
+    def init_hunter(self) -> None:
+        """Initialize AI Bug Hunter Pipeline."""
+        from src.bounty.hunter import HunterPipeline
+
+        async def _llm_call(prompt: str) -> str:
+            """Route LLM call through the JARVIS router."""
+            result = await self.router.route(prompt, user_id="system_hunter")
+            return result.text if hasattr(result, "text") else str(result)
+
+        self.hunter_pipeline = HunterPipeline(
+            tool_registry=self.tool_registry,
+            llm_fn=_llm_call,
+        )
 
     async def connect_mcp(self) -> int:
         """Connect MCP servers and register their tools. Returns tool count."""

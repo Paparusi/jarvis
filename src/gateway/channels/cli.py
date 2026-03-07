@@ -60,6 +60,7 @@ class CLIAdapter:
             self._dreamer = app.dreamer
             self._evolver = app.evolver
             self._bounty_pipeline = app.bounty_pipeline
+            self._hunter_pipeline = app.hunter_pipeline
         else:
             # Legacy path — backward compatible standalone init
             self._app = None
@@ -94,6 +95,7 @@ class CLIAdapter:
             self._dreamer = Dreamer(collector=self._collector, skill_registry=self._skill_registry)
             self._evolver = SkillEvolver(self._skill_registry, self._skill_loader)
             self._bounty_pipeline = None
+            self._hunter_pipeline = None
 
         # CLI-specific state (always initialized regardless of path)
         self._user_id = "cli_user"
@@ -137,7 +139,7 @@ class CLIAdapter:
 ╚══════════════════════════════════════╝{_RESET}
 
   {_DIM}Skills: {skills_count} | Tools: {tools_count} | Memory: ON{_RESET}
-  {_DIM}Commands: /status /stats /profile /health /memory /skills /train /eval /digest /pentest /bounty /dreamtime /reset /quit{_RESET}
+  {_DIM}Commands: /status /stats /profile /health /memory /skills /train /eval /digest /pentest /bounty /hunt /dreamtime /reset /quit{_RESET}
   {_DIM}Gõ tin nhắn rồi Enter để chat.{_RESET}
 """)
 
@@ -188,6 +190,9 @@ class CLIAdapter:
 
         elif cmd.startswith("/bounty"):
             await self._cmd_bounty(cmd)
+
+        elif cmd.startswith("/hunt"):
+            await self._cmd_hunt(cmd)
 
         elif cmd == "/reset":
             self._session.messages.clear()
@@ -849,6 +854,62 @@ Examples:
         else:
             print(f"{_DIM}Usage: /bounty [status|start|stop|programs|findings|review|approve|reject|earnings]{_RESET}")
 
+    async def _cmd_hunt(self, cmd: str) -> None:
+        """AI Bug Hunter pipeline."""
+        if self._hunter_pipeline is None:
+            print(f"{_RED}❌ Hunter Pipeline chưa được khởi tạo.{_RESET}")
+            return
+
+        args = cmd.replace("/hunt", "").strip()
+
+        if not args:
+            print(f"""
+{_BOLD}Usage:{_RESET} /hunt <domain> [mode]
+
+{_DIM}Modes: full (default), quick, deep{_RESET}
+
+Examples:
+  /hunt target.com
+  /hunt target.com quick
+  /hunt target.com deep
+""")
+            return
+
+        parts = args.split()
+        target = parts[0]
+        mode = parts[1] if len(parts) > 1 else "full"
+
+        valid_modes = {"full", "quick", "deep"}
+        if mode not in valid_modes:
+            print(f"{_RED}Mode không hợp lệ: {mode}{_RESET}")
+            print(f"Chọn: {', '.join(sorted(valid_modes))}")
+            return
+
+        print(f"\n{_CYAN}🎯 AI Hunt: {target} (mode: {mode}){_RESET}\n")
+
+        def on_progress(agent: str, msg: str) -> None:
+            print(f"  {_DIM}[{agent}] {msg}{_RESET}")
+
+        self._hunter_pipeline._progress_fn = on_progress
+
+        try:
+            result = await self._hunter_pipeline.hunt(target, mode=mode)
+
+            # Print summary
+            summary = self._hunter_pipeline.format_summary(result)
+            print(f"\n{_GREEN}{_BOLD}{'=' * 50}")
+            print(summary)
+            print(f"{'=' * 50}{_RESET}")
+
+            # Print reports if any
+            if result.reports:
+                for i, report in enumerate(result.reports, 1):
+                    print(f"\n{_BOLD}--- Report #{i} ---{_RESET}")
+                    print(report[:2000])  # Truncate very long reports
+
+        except Exception as e:
+            print(f"{_RED}❌ Hunt error: {e}{_RESET}")
+
     def _cmd_help(self) -> None:
         print(f"""
 {_BOLD}JARVIS CLI Commands:{_RESET}
@@ -865,6 +926,7 @@ Examples:
   /digest    — Daily news digest (topics từ sở thích)
   /pentest   — Pentest tự động: /pentest <target> [scope]
   /bounty    — Bug Bounty Pipeline: /bounty [status|start|stop|programs|findings|review|approve|reject|earnings]
+  /hunt      — AI Bug Hunter: /hunt <domain> [full|quick|deep]
   /dreamtime — Chạy Dreamtime cycle
   /reset     — Reset trò chuyện
   /quit      — Thoát

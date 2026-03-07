@@ -181,6 +181,7 @@ class TelegramAdapter:
             self._proactive = app.proactive              # Must call app.init_proactive() first
             self._mcp_bridge = app._mcp_bridge
             self._bounty_pipeline = app.bounty_pipeline
+            self._hunter_pipeline = app.hunter_pipeline
 
             # Wire dreamtime callback if dreamtime was initialized
             if self._dreamtime is not None:
@@ -273,6 +274,9 @@ class TelegramAdapter:
             # Bug Bounty Pipeline — not available in legacy path
             self._bounty_pipeline = None
 
+            # Hunter Pipeline — not available in legacy path
+            self._hunter_pipeline = None
+
         # Subscribe event bus — DataCollector auto-logs via events (BOTH paths)
         self._bus.subscribe(EventType.TOOL_CALLED, self._on_tool_called)
 
@@ -308,6 +312,7 @@ class TelegramAdapter:
         self._app.add_handler(CommandHandler("digest", self._handle_digest))
         self._app.add_handler(CommandHandler("pentest", self._handle_pentest))
         self._app.add_handler(CommandHandler("bounty", self._handle_bounty))
+        self._app.add_handler(CommandHandler("hunt", self._handle_hunt))
         self._app.add_handler(CallbackQueryHandler(self._handle_feedback))
         self._app.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message)
@@ -2185,6 +2190,88 @@ class TelegramAdapter:
                 "Usage: `/bounty [status|start|stop|programs|findings|review|approve|reject|earnings]`",
                 parse_mode="Markdown",
             )
+
+    async def _handle_hunt(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """/hunt <domain> [mode] — AI Bug Hunter pipeline."""
+        if not self._is_authorized(update):
+            return
+
+        text = (update.message.text or "").replace("/hunt", "").strip()
+
+        if not text:
+            await update.message.reply_text(
+                "Usage: `/hunt <domain> [mode]`\n\n"
+                "Modes: `full` (default), `quick`, `deep`\n\n"
+                "Ví dụ:\n"
+                "  `/hunt target.com`\n"
+                "  `/hunt target.com quick`\n"
+                "  `/hunt target.com deep`",
+                parse_mode="Markdown",
+            )
+            return
+
+        parts = text.split()
+        target = parts[0]
+        mode = parts[1] if len(parts) > 1 else "full"
+
+        valid_modes = {"full", "quick", "deep"}
+        if mode not in valid_modes:
+            await update.message.reply_text(
+                f"Mode không hợp lệ: `{mode}`\n"
+                f"Chọn: {', '.join(f'`{m}`' for m in sorted(valid_modes))}",
+                parse_mode="Markdown",
+            )
+            return
+
+        if self._hunter_pipeline is None:
+            await update.message.reply_text("❌ Hunter Pipeline chưa được khởi tạo.")
+            return
+
+        status_msg = await update.message.reply_text(
+            f"🎯 AI Hunt đang chạy: `{target}` (mode: {mode})...",
+            parse_mode="Markdown",
+        )
+
+        # Progress callback to update Telegram message
+        last_update = [0.0]
+
+        def on_progress(agent: str, msg: str) -> None:
+            import time as _time_mod
+            now = _time_mod.time()
+            if now - last_update[0] < 3.0:
+                return
+            last_update[0] = now
+            try:
+                asyncio.get_event_loop().create_task(
+                    status_msg.edit_text(
+                        f"🎯 Hunting `{target}`...\n\n[{agent}] {msg}",
+                        parse_mode="Markdown",
+                    )
+                )
+            except Exception:
+                pass
+
+        self._hunter_pipeline._progress_fn = on_progress
+
+        try:
+            result = await self._hunter_pipeline.hunt(target, mode=mode)
+
+            # Format summary
+            summary = self._hunter_pipeline.format_summary(result)
+            await status_msg.edit_text(summary)
+
+            # Send reports as separate messages
+            if result.reports:
+                for i, report in enumerate(result.reports[:5], 1):
+                    truncated = report[:4000]  # Telegram 4096 char limit
+                    await update.message.reply_text(
+                        f"📝 *Report #{i}*\n\n{truncated}",
+                        parse_mode="Markdown",
+                    )
+
+        except Exception as e:
+            log.error("hunt_command_error", error=str(e))
+            await status_msg.edit_text(f"❌ Hunt error: {e}")
 
     async def _handle_digest(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """/digest [topics] — Generate daily news digest on demand."""

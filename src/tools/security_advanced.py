@@ -193,7 +193,7 @@ _SECRET_PATTERNS: dict[str, re.Pattern] = {
     "Telegram Bot Token": re.compile(r"\b[0-9]{8,10}:AA[0-9A-Za-z\-_]{33}\b"),
     "Private Key": re.compile(r"-----BEGIN\s+(?:RSA|OPENSSH|EC|PGP|DSA)\s+PRIVATE\s+KEY"),
     "JWT Token": re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_\-]+"),
-    "Heroku API Key": re.compile(r"[hH]eroku.*[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}"),
+    "Heroku API Key": re.compile(r"(?:HEROKU_API_KEY|heroku[_-]?api[_-]?key)\s*[=:]\s*['\"]?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})['\"]?"),
     "Password in URL": re.compile(r"https?://[^\s/:]{1,80}:([^\s/@]{8,64})@[a-zA-Z0-9]"),
     "AWS Secret Key": re.compile(r"(?:aws_secret_access_key|AWS_SECRET_ACCESS_KEY)\s*[=:]\s*['\"]?([A-Za-z0-9/+=]{40})['\"]?"),
     "Generic API Key": re.compile(r"(?:api[_-]?key|apikey|api_secret)\s*[=:]\s*['\"]([A-Za-z0-9\-_]{20,})['\"]"),
@@ -407,6 +407,20 @@ _NUCLEI_PATH = os.path.join(
 )
 
 
+_TEMPLATE_DIR = os.path.expanduser("~/nuclei-templates/http")
+
+# Map tag names to template directories
+_TAG_TO_DIRS: dict[str, str] = {
+    "cves": "cves",
+    "misconfigurations": "misconfiguration",
+    "exposed-panels": "exposed-panels",
+    "takeovers": "takeovers",
+    "technologies": "technologies",
+    "exposures": "exposures",
+    "default-logins": "default-logins",
+}
+
+
 async def nuclei_scan(
     url: str, templates: str = "cves,misconfigurations,exposed-panels,takeovers",
 ) -> ToolResult:
@@ -421,17 +435,33 @@ async def nuclei_scan(
             execution_time_ms=0,
         )
 
+    # Build template path args from tag names (more reliable than -tags flag)
+    template_args: list[str] = []
+    for tag in templates.split(","):
+        tag = tag.strip()
+        dir_name = _TAG_TO_DIRS.get(tag, tag)
+        tpl_path = os.path.join(_TEMPLATE_DIR, dir_name)
+        if os.path.isdir(tpl_path):
+            template_args.extend(["-t", tpl_path])
+
+    if not template_args:
+        elapsed = int((time.time() - start) * 1000)
+        return ToolResult(
+            success=False, output="",
+            error=f"No valid template directories found for: {templates}",
+            execution_time_ms=elapsed,
+        )
+
     # All args passed as separate list items — no shell injection risk
     cmd = [
         _NUCLEI_PATH,
         "-u", url,
-        "-tags", templates,
+        *template_args,
         "-jsonl",
         "-silent",
         "-no-color",
         "-timeout", "30",
         "-rate-limit", "50",
-        "-no-update-check",
     ]
 
     try:
@@ -441,6 +471,13 @@ async def nuclei_scan(
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=290)
+        if proc.returncode not in (0, None):
+            err_msg = stderr.decode().strip()[:500] if stderr else f"exit code {proc.returncode}"
+            elapsed = int((time.time() - start) * 1000)
+            return ToolResult(
+                success=False, output="", error=f"Nuclei error: {err_msg}",
+                execution_time_ms=elapsed,
+            )
     except asyncio.TimeoutError:
         elapsed = int((time.time() - start) * 1000)
         return ToolResult(
