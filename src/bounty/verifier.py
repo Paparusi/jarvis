@@ -18,6 +18,7 @@ _VULN_TO_TOOL: dict[str, str] = {
     "lfi": "lfi_test",
     "cors": "cors_check",
     "headers": "header_audit",
+    "missing_headers": "header_audit",
 }
 
 _SEVERITY_MULTIPLIER: dict[str, tuple[float, float]] = {
@@ -41,7 +42,12 @@ class Verifier:
         - If confirmed (data["vulnerable"]): confidence = max(current, 0.90)
         - If not confirmed: confidence = min(current, 0.40)
         - On error: keep original confidence
+        - info_disclosure: follow redirect with http_request to check real status
         """
+        # Special handling for info_disclosure (dir_bruteforce findings)
+        if finding.vuln_type == "info_disclosure" and finding.poc:
+            return await self._verify_info_disclosure(finding)
+
         tool_name = _VULN_TO_TOOL.get(finding.vuln_type)
         if not tool_name:
             log.warning("no_verify_tool", vuln_type=finding.vuln_type)
@@ -59,6 +65,31 @@ class Verifier:
             log.warning("verify_error", vuln_type=finding.vuln_type, error=str(exc))
             # Keep original confidence on error
 
+        return finding
+
+    async def _verify_info_disclosure(self, finding: BountyFinding) -> BountyFinding:
+        """Verify info_disclosure by following redirects with http_request."""
+        try:
+            result = await self.registry.execute(
+                "http_request", url=finding.poc, method="GET",
+            )
+            if result.success and result.data:
+                status = result.data.get("status_code", 0)
+                body_len = len(result.data.get("body", ""))
+                if status == 200 and body_len > 50:
+                    finding.confidence = max(finding.confidence, 0.92)
+                    log.info("info_disclosure_confirmed", poc=finding.poc, status=status)
+                elif status == 403:
+                    finding.confidence = max(finding.confidence, 0.70)
+                    log.info("info_disclosure_forbidden", poc=finding.poc)
+                else:
+                    # Redirected to homepage or 404 = false positive
+                    finding.confidence = min(finding.confidence, 0.20)
+                    log.info("info_disclosure_not_confirmed", poc=finding.poc, status=status)
+            else:
+                finding.confidence = min(finding.confidence, 0.30)
+        except Exception as exc:
+            log.warning("verify_info_disclosure_error", error=str(exc))
         return finding
 
     def estimate_bounty(

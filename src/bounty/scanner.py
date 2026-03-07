@@ -149,21 +149,29 @@ class VulnScanner:
             for entry in found_dirs:
                 path = entry.get("path", "")
                 status = entry.get("status", 0)
-                # Only flag sensitive paths (not generic 200/301 on /about etc.)
-                if path.lower() in _SENSITIVE_PATHS:
-                    sev = "HIGH" if path in ("/.env", "/.git/config", "/wp-config.php") else "MEDIUM"
-                    cvss = 7.5 if sev == "HIGH" else 5.0
+                # Only flag sensitive paths with meaningful status codes
+                # 200 = content accessible, 403 = exists but forbidden
+                # 301/302 = redirect (often catch-all, likely false positive)
+                if path.lower() in _SENSITIVE_PATHS and status in (200, 403):
+                    if status == 200:
+                        sev = "HIGH" if path in ("/.env", "/.git/config", "/wp-config.php") else "MEDIUM"
+                        cvss = 7.5 if sev == "HIGH" else 5.0
+                        confidence = 0.85
+                    else:  # 403
+                        sev = "LOW"
+                        cvss = 2.5
+                        confidence = 0.6
                     findings.append(BountyFinding(
                         target_id=0,
                         vuln_type="info_disclosure",
                         severity=sev,
                         cvss=cvss,
-                        confidence=0.8,
+                        confidence=confidence,
                         title=f"Sensitive file exposed: {path} (HTTP {status}) on {url}",
                         description=f"Found {path} returning HTTP {status}",
                         poc=entry.get("url", ""),
                     ))
-                # 403 on sensitive paths = existence confirmed
+                # Interesting admin/debug paths accessible
                 elif status == 200 and path.startswith(("/admin", "/debug", "/api/internal")):
                     findings.append(BountyFinding(
                         target_id=0,
