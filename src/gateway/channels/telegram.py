@@ -47,6 +47,7 @@ from src.skills.evolver import SkillEvolver
 from src.swarm.coordinator import SwarmCoordinator
 from src.swarm.decomposer import TaskDecomposer
 from src.swarm.factory import AgentFactory
+from src.app import JarvisApp
 from src.utils.config import get_project_root
 from src.utils.logging import get_logger
 
@@ -138,88 +139,137 @@ _REQUEST_TIMEOUT = 90  # seconds — max time for a single request end-to-end
 class TelegramAdapter:
     """Telegram bot adapter for JARVIS with memory, skills, and routing."""
 
-    def __init__(self, token: str) -> None:
-        self._token = token
-        self._sessions = SessionManager()
-        self._collector = DataCollector()
-        self._processor = DataProcessor()
-        self._feedback = FeedbackStore()
-        self._scheduler = Scheduler()
-        self._safety = SafetyGuard()
-        # Cache recent responses for feedback buttons (message_id → context)
-        self._response_cache: dict[int, dict] = {}
-        # Cache failed requests for retry buttons (retry_id → context)
-        self._retry_cache: dict[str, dict] = {}
-        # Per-user lock — prevents concurrent processing for same user
-        self._user_locks: dict[str, asyncio.Lock] = {}
-        self._memory = MemoryManager()
-        self._user_model = UserModel()
-        self._decision_engine = DecisionEngine(self._user_model)
-        self._intent_tracker = ConversationTracker()
-        self._skill_loader = SkillLoader()
-        self._skill_router = SkillRouter(self._skill_loader)
-        self._skill_executor = SkillExecutor()
-        self._bus = get_event_bus()
-        self._health_monitor = HealthMonitor()
-        self._app: Application | None = None
+    def __init__(self, app_or_token, token: str | None = None) -> None:
+        # Support both: TelegramAdapter(app, token="xxx") and TelegramAdapter("xxx")
+        if isinstance(app_or_token, JarvisApp):
+            app = app_or_token
+            self._token = token
+        else:
+            app = None
+            self._token = app_or_token
 
-        # Load skills on init
-        self._skill_loader.load_all()
-        self._skill_registry = SkillRegistry(self._skill_loader)
-        self._skill_registry._apply_metrics()
+        if app is not None:
+            # --- New path: receive components from JarvisApp container ---
+            self._sessions = app.sessions
+            self._collector = app.collector
+            self._processor = app.processor
+            self._feedback = FeedbackStore()       # Telegram-specific, keep local
+            self._scheduler = Scheduler()           # Telegram-specific, keep local
+            self._safety = SafetyGuard()            # Telegram-specific, keep local
+            self._response_cache: dict[int, dict] = {}
+            self._retry_cache: dict[str, dict] = {}
+            self._user_locks: dict[str, asyncio.Lock] = {}
+            self._memory = app.memory
+            self._user_model = app.user_model
+            self._decision_engine = DecisionEngine(self._user_model)
+            self._intent_tracker = ConversationTracker()
+            self._skill_loader = app.skill_loader
+            self._skill_router = app.skill_router
+            self._skill_executor = app.skill_executor
+            self._bus = app.event_bus
+            self._health_monitor = app.health_monitor   # Must call app.init_health() first
+            self._app: Application | None = None         # telegram.ext Application (set in start())
+            self._skill_registry = app.skill_registry
+            self._tool_registry = app.tool_registry
+            self._router = app.router
+            self._dreamtime = app.dreamtime              # Must call app.init_dreamtime() first
+            self._memory_consolidator = app.memory_consolidator
+            self._dreamer = app.dreamer
+            self._evolver = app.evolver
+            self._decomposer = app.decomposer            # Must call app.init_swarm() first
+            self._swarm = app.swarm
+            self._proactive = app.proactive              # Must call app.init_proactive() first
+            self._mcp_bridge = app._mcp_bridge
 
-        # Register tools (centralized in registry_all.py)
-        self._tool_registry = ToolRegistry()
-        for tool in ALL_TOOLS:
-            self._tool_registry.register(tool)
+            # Wire dreamtime callback if dreamtime was initialized
+            if self._dreamtime is not None:
+                self._dreamtime.set_dream_callback(self._run_dreamtime_cycle)
 
-        # Init router with skill metadata summary + tools
-        skill_summary = self._skill_loader.get_metadata_summary()
-        self._router = LLMRouter(
-            skill_summary=skill_summary,
-            tool_registry=self._tool_registry,
-        )
+            # Wire health monitor to router if available
+            if self._health_monitor is not None:
+                self._router._health_monitor = self._health_monitor
+        else:
+            # --- Legacy path: self-contained initialization (backward compat) ---
+            self._sessions = SessionManager()
+            self._collector = DataCollector()
+            self._processor = DataProcessor()
+            self._feedback = FeedbackStore()
+            self._scheduler = Scheduler()
+            self._safety = SafetyGuard()
+            # Cache recent responses for feedback buttons (message_id -> context)
+            self._response_cache: dict[int, dict] = {}
+            # Cache failed requests for retry buttons (retry_id -> context)
+            self._retry_cache: dict[str, dict] = {}
+            # Per-user lock -- prevents concurrent processing for same user
+            self._user_locks: dict[str, asyncio.Lock] = {}
+            self._memory = MemoryManager()
+            self._user_model = UserModel()
+            self._decision_engine = DecisionEngine(self._user_model)
+            self._intent_tracker = ConversationTracker()
+            self._skill_loader = SkillLoader()
+            self._skill_router = SkillRouter(self._skill_loader)
+            self._skill_executor = SkillExecutor()
+            self._bus = get_event_bus()
+            self._health_monitor = HealthMonitor()
+            self._app: Application | None = None
 
-        # Expose health monitor for router degradation
-        self._router._health_monitor = self._health_monitor
+            # Load skills on init
+            self._skill_loader.load_all()
+            self._skill_registry = SkillRegistry(self._skill_loader)
+            self._skill_registry._apply_metrics()
 
-        # Dreamtime Engine — consolidate memory + analyze skills during idle
-        self._dreamtime = DreamtimeScheduler(idle_minutes=30, cron_hour=2, enabled=True)
-        self._memory_consolidator = MemoryConsolidator(
-            semantic_memory=self._memory.semantic,
-        )
-        self._dreamer = Dreamer(
-            collector=self._collector,
-            skill_registry=self._skill_registry,
-        )
-        self._dreamtime.set_dream_callback(self._run_dreamtime_cycle)
+            # Register tools (centralized in registry_all.py)
+            self._tool_registry = ToolRegistry()
+            for tool in ALL_TOOLS:
+                self._tool_registry.register(tool)
 
-        # Skill Evolver — optimize/merge/prune skills during Dreamtime
-        self._evolver = SkillEvolver(
-            registry=self._skill_registry,
-            loader=self._skill_loader,
-        )
+            # Init router with skill metadata summary + tools
+            skill_summary = self._skill_loader.get_metadata_summary()
+            self._router = LLMRouter(
+                skill_summary=skill_summary,
+                tool_registry=self._tool_registry,
+            )
 
-        # Swarm Coordinator — parallel multi-agent task decomposition
-        self._decomposer = TaskDecomposer(complexity_threshold=40)
-        self._swarm = SwarmCoordinator(
-            decomposer=self._decomposer,
-            factory=AgentFactory(tool_registry=self._tool_registry),
-        )
+            # Expose health monitor for router degradation
+            self._router._health_monitor = self._health_monitor
 
-        # Proactive Engine — morning briefing + daily digest
-        from src.intelligence.proactive import ProactiveEngine
-        self._proactive = ProactiveEngine(
-            memory=self._memory.semantic,
-            user_model=self._user_model,
-            collector=self._collector,
-            user_id=f"telegram_{os.environ.get('JARVIS_OWNER_ID', '1991690969')}",
-        )
+            # Dreamtime Engine — consolidate memory + analyze skills during idle
+            self._dreamtime = DreamtimeScheduler(idle_minutes=30, cron_hour=2, enabled=True)
+            self._memory_consolidator = MemoryConsolidator(
+                semantic_memory=self._memory.semantic,
+            )
+            self._dreamer = Dreamer(
+                collector=self._collector,
+                skill_registry=self._skill_registry,
+            )
+            self._dreamtime.set_dream_callback(self._run_dreamtime_cycle)
 
-        # MCP Bridge — lazy connect (no blocking init)
-        self._mcp_bridge = None
+            # Skill Evolver — optimize/merge/prune skills during Dreamtime
+            self._evolver = SkillEvolver(
+                registry=self._skill_registry,
+                loader=self._skill_loader,
+            )
 
-        # Subscribe event bus — DataCollector auto-logs via events
+            # Swarm Coordinator — parallel multi-agent task decomposition
+            self._decomposer = TaskDecomposer(complexity_threshold=40)
+            self._swarm = SwarmCoordinator(
+                decomposer=self._decomposer,
+                factory=AgentFactory(tool_registry=self._tool_registry),
+            )
+
+            # Proactive Engine — morning briefing + daily digest
+            from src.intelligence.proactive import ProactiveEngine
+            self._proactive = ProactiveEngine(
+                memory=self._memory.semantic,
+                user_model=self._user_model,
+                collector=self._collector,
+                user_id=f"telegram_{os.environ.get('JARVIS_OWNER_ID', '1991690969')}",
+            )
+
+            # MCP Bridge — lazy connect (no blocking init)
+            self._mcp_bridge = None
+
+        # Subscribe event bus — DataCollector auto-logs via events (BOTH paths)
         self._bus.subscribe(EventType.TOOL_CALLED, self._on_tool_called)
 
     async def _on_tool_called(self, event) -> None:

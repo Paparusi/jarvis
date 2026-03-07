@@ -32,24 +32,35 @@ async def run_telegram() -> None:
         log.error("missing_api_key", hint="Set ANTHROPIC_API_KEY in .env file")
         sys.exit(1)
 
+    # --- Build shared application container ---
+    from src.app import JarvisApp
+
+    app = JarvisApp()
+    app.init_dreamtime()
+    app.init_health()
+    app.init_swarm()
+    app.init_proactive()
+
+    # Connect MCP servers (async)
+    await app.connect_mcp()
+
     # Start Prometheus metrics server
     metrics_server = None
     try:
         from src.monitoring.server import MetricsServer
+
         metrics_server = MetricsServer(port=9090)
+        metrics_server._tracker = app.router._tracker
+        metrics_server._health_monitor = app.health_monitor
+        metrics_server._skill_registry = app.skill_registry
         await metrics_server.start()
     except Exception as e:
         log.warning("metrics_server_failed", error=str(e))
 
+    # Create adapter with shared container
     from src.gateway.channels.telegram import TelegramAdapter
-    adapter = TelegramAdapter(token)
 
-    # Wire metrics server with adapter components
-    if metrics_server:
-        metrics_server._tracker = adapter._router._tracker
-        metrics_server._health_monitor = adapter._health_monitor
-        metrics_server._skill_registry = adapter._skill_registry
-
+    adapter = TelegramAdapter(app, token=token)
     await adapter.start()
 
     log.info("jarvis_ready", channel="telegram")
@@ -73,6 +84,7 @@ async def run_telegram() -> None:
     if metrics_server:
         await metrics_server.stop()
     await adapter.stop()
+    await app.shutdown()
     log.info("jarvis_stopped")
 
 
@@ -85,12 +97,20 @@ async def run_cli() -> None:
         log.error("missing_api_key", hint="Set ANTHROPIC_API_KEY in .env file")
         sys.exit(1)
 
+    # --- Build shared application container ---
+    from src.app import JarvisApp
+
+    app = JarvisApp()
+    app.init_dreamtime()
+
     from src.gateway.channels.cli import CLIAdapter
-    adapter = CLIAdapter()
+
+    adapter = CLIAdapter(app)
 
     log.info("jarvis_ready", channel="cli")
     await adapter.start()
 
+    await app.shutdown()
     log.info("jarvis_stopped", channel="cli")
 
 

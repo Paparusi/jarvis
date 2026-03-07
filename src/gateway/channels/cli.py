@@ -24,6 +24,7 @@ from src.skills.registry import SkillRegistry
 from src.skills.router import SkillRouter
 from src.tools.base import ToolRegistry
 from src.tools.registry_all import ALL_TOOLS
+from src.app import JarvisApp
 from src.utils.logging import get_logger
 
 log = get_logger("cli")
@@ -41,39 +42,58 @@ _RESET = "\033[0m"
 class CLIAdapter:
     """Interactive CLI adapter for JARVIS."""
 
-    def __init__(self) -> None:
-        self._sessions = SessionManager()
-        self._collector = DataCollector()
-        self._processor = DataProcessor()
-        self._memory = MemoryManager()
-        self._user_model = UserModel()
-        self._skill_loader = SkillLoader()
-        self._skill_router = SkillRouter(self._skill_loader)
-        self._bus = get_event_bus()
+    def __init__(self, app: JarvisApp | None = None) -> None:
+        if app is not None:
+            self._app = app
+            self._sessions = app.sessions
+            self._collector = app.collector
+            self._processor = app.processor
+            self._memory = app.memory
+            self._user_model = app.user_model
+            self._skill_loader = app.skill_loader
+            self._skill_router = app.skill_router
+            self._bus = app.event_bus
+            self._skill_registry = app.skill_registry
+            self._tool_registry = app.tool_registry
+            self._router = app.router
+            self._memory_consolidator = app.memory_consolidator
+            self._dreamer = app.dreamer
+            self._evolver = app.evolver
+        else:
+            # Legacy path — backward compatible standalone init
+            self._app = None
+            self._sessions = SessionManager()
+            self._collector = DataCollector()
+            self._processor = DataProcessor()
+            self._memory = MemoryManager()
+            self._user_model = UserModel()
+            self._skill_loader = SkillLoader()
+            self._skill_router = SkillRouter(self._skill_loader)
+            self._bus = get_event_bus()
 
-        # Load skills
-        self._skill_loader.load_all()
-        self._skill_registry = SkillRegistry(self._skill_loader)
-        self._skill_registry._apply_metrics()
+            # Load skills
+            self._skill_loader.load_all()
+            self._skill_registry = SkillRegistry(self._skill_loader)
+            self._skill_registry._apply_metrics()
 
-        # Register tools (centralized in registry_all.py)
-        self._tool_registry = ToolRegistry()
-        for tool in ALL_TOOLS:
-            self._tool_registry.register(tool)
+            # Register tools (centralized in registry_all.py)
+            self._tool_registry = ToolRegistry()
+            for tool in ALL_TOOLS:
+                self._tool_registry.register(tool)
 
-        # Init router
-        skill_summary = self._skill_loader.get_metadata_summary()
-        self._router = LLMRouter(
-            skill_summary=skill_summary,
-            tool_registry=self._tool_registry,
-        )
+            # Init router
+            skill_summary = self._skill_loader.get_metadata_summary()
+            self._router = LLMRouter(
+                skill_summary=skill_summary,
+                tool_registry=self._tool_registry,
+            )
 
-        # Dreamtime components
-        self._memory_consolidator = MemoryConsolidator(self._memory.semantic)
-        self._dreamer = Dreamer(collector=self._collector, skill_registry=self._skill_registry)
-        self._evolver = SkillEvolver(self._skill_registry, self._skill_loader)
+            # Dreamtime components
+            self._memory_consolidator = MemoryConsolidator(self._memory.semantic)
+            self._dreamer = Dreamer(collector=self._collector, skill_registry=self._skill_registry)
+            self._evolver = SkillEvolver(self._skill_registry, self._skill_loader)
 
-        # CLI-specific
+        # CLI-specific state (always initialized regardless of path)
         self._user_id = "cli_user"
         self._session = self._sessions.get_or_create(
             Channel.CLI, self._user_id, "CLI User"

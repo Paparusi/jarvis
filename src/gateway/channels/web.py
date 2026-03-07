@@ -31,6 +31,7 @@ from src.skills.registry import SkillRegistry
 from src.skills.router import SkillRouter
 from src.tools.base import ToolRegistry
 from src.tools.registry_all import ALL_TOOLS
+from src.app import JarvisApp
 from src.utils.logging import get_logger
 
 log = get_logger("web")
@@ -39,13 +40,13 @@ log = get_logger("web")
 STATIC_DIR = Path(__file__).parent.parent.parent.parent / "web" / "static"
 
 
-def create_app() -> FastAPI:
+def create_app(app: JarvisApp | None = None) -> FastAPI:
     """Create and configure the FastAPI application."""
-    app = FastAPI(title="JARVIS", version="2.0")
-    adapter = WebAdapter()
+    fastapi_app = FastAPI(title="JARVIS", version="2.0")
+    adapter = WebAdapter(app)
 
     # --- WebSocket chat ---
-    @app.websocket("/ws/chat")
+    @fastapi_app.websocket("/ws/chat")
     async def websocket_chat(ws: WebSocket):
         await ws.accept()
         session_id = None
@@ -86,65 +87,80 @@ def create_app() -> FastAPI:
                 pass
 
     # --- REST API ---
-    @app.get("/")
+    @fastapi_app.get("/")
     async def index():
         html_path = STATIC_DIR / "index.html"
         if html_path.exists():
             return HTMLResponse(html_path.read_text(encoding="utf-8"))
         return HTMLResponse("<h1>JARVIS Web UI</h1><p>Static files not found.</p>")
 
-    @app.get("/api/status")
+    @fastapi_app.get("/api/status")
     async def api_status():
         return JSONResponse(adapter.get_status())
 
-    @app.get("/api/health")
+    @fastapi_app.get("/api/health")
     async def api_health():
         return JSONResponse(await adapter.get_health())
 
-    @app.get("/api/skills")
+    @fastapi_app.get("/api/skills")
     async def api_skills():
         return JSONResponse(adapter.get_skills())
 
-    @app.get("/api/memory")
+    @fastapi_app.get("/api/memory")
     async def api_memory():
         return JSONResponse(adapter.get_memories())
 
     # Mount static files (CSS, JS, etc.)
     if STATIC_DIR.exists():
-        app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+        fastapi_app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-    return app
+    return fastapi_app
 
 
 class WebAdapter:
     """Web channel adapter — manages state for web clients."""
 
-    def __init__(self) -> None:
-        self._sessions = SessionManager()
-        self._collector = DataCollector()
-        self._processor = DataProcessor()
-        self._memory = MemoryManager()
-        self._user_model = UserModel()
-        self._skill_loader = SkillLoader()
-        self._skill_router = SkillRouter(self._skill_loader)
-        self._bus = get_event_bus()
+    def __init__(self, app: JarvisApp | None = None) -> None:
+        if app is not None:
+            self._app = app
+            self._sessions = app.sessions
+            self._collector = app.collector
+            self._processor = app.processor
+            self._memory = app.memory
+            self._user_model = app.user_model
+            self._skill_loader = app.skill_loader
+            self._skill_router = app.skill_router
+            self._bus = app.event_bus
+            self._skill_registry = app.skill_registry
+            self._tool_registry = app.tool_registry
+            self._router = app.router
+        else:
+            self._app = None
+            self._sessions = SessionManager()
+            self._collector = DataCollector()
+            self._processor = DataProcessor()
+            self._memory = MemoryManager()
+            self._user_model = UserModel()
+            self._skill_loader = SkillLoader()
+            self._skill_router = SkillRouter(self._skill_loader)
+            self._bus = get_event_bus()
 
-        # Load skills
-        self._skill_loader.load_all()
-        self._skill_registry = SkillRegistry(self._skill_loader)
-        self._skill_registry._apply_metrics()
+            # Load skills
+            self._skill_loader.load_all()
+            self._skill_registry = SkillRegistry(self._skill_loader)
+            self._skill_registry._apply_metrics()
 
-        # Register tools (centralized in registry_all.py)
-        self._tool_registry = ToolRegistry()
-        for tool in ALL_TOOLS:
-            self._tool_registry.register(tool)
+            # Register tools (centralized in registry_all.py)
+            self._tool_registry = ToolRegistry()
+            for tool in ALL_TOOLS:
+                self._tool_registry.register(tool)
 
-        # Init router
-        skill_summary = self._skill_loader.get_metadata_summary()
-        self._router = LLMRouter(
-            skill_summary=skill_summary,
-            tool_registry=self._tool_registry,
-        )
+            # Init router
+            skill_summary = self._skill_loader.get_metadata_summary()
+            self._router = LLMRouter(
+                skill_summary=skill_summary,
+                tool_registry=self._tool_registry,
+            )
 
         self._user_id = "web_user"
         self._session = self._sessions.get_or_create(
