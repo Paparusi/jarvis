@@ -684,6 +684,66 @@ class TestVulnScanAgent:
         assert len(result.findings) >= 1
         assert any("takeover" in e for e in result.errors)
 
+    @pytest.mark.asyncio
+    async def test_vuln_scanner_ffuf_drops_403(self, registry):
+        """VulnScanner drops 403 responses (WAF noise)."""
+        async def _mock_exec(name, **kw):
+            if name == "ffuf_fuzz":
+                return _tool_result(data={
+                    "found": [
+                        {"path": "/.env", "status": 403, "length": 200, "url": "https://test.com/.env"},
+                        {"path": "/.git/config", "status": 403, "length": 200, "url": "https://test.com/.git/config"},
+                    ],
+                })
+            if name == "nuclei_scan":
+                return _tool_result(data={"count": 0, "findings": []})
+            return _tool_result(data={})
+
+        registry.execute = AsyncMock(side_effect=_mock_exec)
+        agent = VulnScanAgent(registry)
+        result = await agent.run({
+            "alive_hosts": [{"url": "https://test.com", "priority": 5}],
+            "endpoints": [],
+            "subdomains": [],
+        })
+
+        assert result.success is True
+        # 403 responses should be completely dropped
+        assert len(result.findings) == 0
+
+    @pytest.mark.asyncio
+    async def test_vuln_scanner_ffuf_spa_detection(self, registry):
+        """VulnScanner detects SPA catch-all and drops false positives."""
+        async def _mock_exec(name, **kw):
+            if name == "ffuf_fuzz":
+                return _tool_result(data={
+                    "found": [
+                        # SPA returns same size for every path
+                        {"path": "/.aws/credentials", "status": 200, "length": 50000,
+                         "url": "https://spa.test.com/.aws/credentials"},
+                    ],
+                })
+            if name == "nuclei_scan":
+                return _tool_result(data={"count": 0, "findings": []})
+            return _tool_result(data={})
+
+        registry.execute = AsyncMock(side_effect=_mock_exec)
+        agent = VulnScanAgent(registry)
+        # Mock _get_baseline_size to return SPA-like size
+        agent._get_baseline_size = AsyncMock(return_value=50000)
+        # Mock _verify_body to not make real HTTP requests
+        agent._verify_body = AsyncMock(return_value=False)
+
+        result = await agent.run({
+            "alive_hosts": [{"url": "https://spa.test.com", "priority": 5}],
+            "endpoints": [],
+            "subdomains": [],
+        })
+
+        assert result.success is True
+        # SPA catch-all should be filtered out
+        assert len(result.findings) == 0
+
 
 # ===========================================================================
 # 24-28: AIAnalyzerAgent

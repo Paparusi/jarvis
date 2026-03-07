@@ -3,7 +3,7 @@
 Runs automated vulnerability checks against discovered assets:
 - Subdomain takeover detection on enumerated subdomains
 - Nuclei template scanning (CVEs, misconfigs, exposed panels)
-- Directory fuzzing with ffuf for sensitive files (.env, .git, etc.)
+- Directory fuzzing with ffuf + body verification for sensitive files
 - Open redirect testing on discovered endpoints
 """
 
@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import asyncio
 import time
+
+import httpx as httpx_client
 
 from src.bounty.agents.base import AgentResult, BaseHunterAgent
 from src.bounty.models import BountyFinding
@@ -21,35 +23,32 @@ log = get_logger("bounty.agents.vuln_scanner")
 # CVSS score mapping by severity string
 _CVSS_MAP = {"CRITICAL": 9.5, "HIGH": 8.0, "MEDIUM": 5.5, "LOW": 3.0}
 
-# Sensitive paths worth flagging from directory fuzzing
-_SENSITIVE_PATHS: dict[str, str] = {
-    "/.env": "HIGH",
-    "/.git": "HIGH",
-    "/.git/config": "HIGH",
-    "/.git/HEAD": "HIGH",
-    "/.aws/credentials": "CRITICAL",
-    "/wp-config.php": "HIGH",
-    "/wp-config.php.bak": "HIGH",
-    "/.htpasswd": "HIGH",
-    "/phpinfo.php": "MEDIUM",
-    "/server-status": "MEDIUM",
-    "/server-info": "MEDIUM",
-    "/actuator/env": "HIGH",
-    "/actuator/health": "MEDIUM",
-    "/swagger.json": "MEDIUM",
-    "/swagger-ui.html": "MEDIUM",
-    "/graphql": "MEDIUM",
-    "/debug": "MEDIUM",
-    "/.DS_Store": "LOW",
-    "/robots.txt": "INFO",
-    "/.well-known/security.txt": "INFO",
-    "/crossdomain.xml": "LOW",
-    "/elmah.axd": "MEDIUM",
-    "/trace.axd": "MEDIUM",
-    "/backup.sql": "CRITICAL",
-    "/dump.sql": "CRITICAL",
-    "/database.sql": "CRITICAL",
+# Sensitive paths: (severity, expected_content_type_prefix, body_signature)
+# body_signature: if present in response body, confirms it's real (not SPA catch-all)
+_SENSITIVE_PATHS: dict[str, tuple[str, str, str]] = {
+    "/.env": ("HIGH", "text/plain", "="),
+    "/.git/config": ("HIGH", "text/plain", "[core]"),
+    "/.git/HEAD": ("HIGH", "text/plain", "ref:"),
+    "/.aws/credentials": ("CRITICAL", "text/plain", "aws_access_key_id"),
+    "/wp-config.php": ("HIGH", "text/", "DB_"),
+    "/wp-config.php.bak": ("HIGH", "text/", "DB_"),
+    "/.htpasswd": ("HIGH", "text/plain", ":"),
+    "/phpinfo.php": ("MEDIUM", "text/html", "phpinfo()"),
+    "/server-status": ("MEDIUM", "text/html", "Apache Server Status"),
+    "/server-info": ("MEDIUM", "text/html", "Apache Server Information"),
+    "/actuator/env": ("HIGH", "application/json", "propertySources"),
+    "/actuator/health": ("MEDIUM", "application/json", "status"),
+    "/swagger.json": ("MEDIUM", "application/json", "swagger"),
+    "/swagger-ui.html": ("MEDIUM", "text/html", "swagger"),
+    "/graphql": ("MEDIUM", "application/json", ""),
+    "/backup.sql": ("CRITICAL", "application/", "CREATE TABLE"),
+    "/dump.sql": ("CRITICAL", "application/", "CREATE TABLE"),
+    "/database.sql": ("CRITICAL", "application/", "CREATE TABLE"),
+    "/elmah.axd": ("MEDIUM", "text/html", "Error Log"),
+    "/trace.axd": ("MEDIUM", "text/html", "Trace"),
 }
+
+_USER_AGENT = "Mozilla/5.0 (compatible; JARVIS/2.0)"
 
 
 class VulnScanAgent(BaseHunterAgent):
@@ -201,7 +200,14 @@ class VulnScanAgent(BaseHunterAgent):
         findings: list[BountyFinding],
         errors: list[str],
     ) -> None:
-        """Run directory fuzzing on top alive hosts."""
+        """Run directory fuzzing with body verification to filter FP.
+
+        Steps per host:
+        1. ffuf finds paths returning 200/301/302
+        2. Detect SPA catch-all (baseline request to random path)
+        3. For sensitive paths with 200: verify content-type + body signature
+        4. Drop all 403s (WAF noise, not reportable)
+        """
         for host in alive_hosts[:3]:
             url = host.get("url", "")
             if not url:
@@ -210,47 +216,60 @@ class VulnScanAgent(BaseHunterAgent):
                 result = await self.registry.execute("ffuf_fuzz", url=url, wordlist="bounty")
                 if not result.success:
                     continue
+
+                # Detect SPA catch-all: request a random nonsense path
+                baseline_size = await self._get_baseline_size(url)
+
                 for item in result.data.get("found", []):
                     path = item.get("path", "")
                     status = item.get("status", 0)
+                    length = item.get("length", 0)
+
+                    # Only care about 200 responses (403 = WAF, not reportable)
+                    if status != 200:
+                        continue
 
                     # Check against known sensitive paths
-                    base_severity = _SENSITIVE_PATHS.get(path)
-                    if not base_severity:
+                    path_info = _SENSITIVE_PATHS.get(path)
+                    if not path_info:
                         continue
-                    if base_severity == "INFO":
-                        continue  # Not worth reporting
-                    if status not in (200, 403):
+                    severity, expected_ct, body_sig = path_info
+
+                    # SPA detection: if response size matches baseline, it's catch-all
+                    if baseline_size and abs(length - baseline_size) < 500:
+                        log.debug("spa_catchall_skip", path=path, url=url,
+                                  length=length, baseline=baseline_size)
                         continue
 
-                    # Downgrade severity if 403 (accessible but forbidden)
-                    if status == 403 and base_severity in ("HIGH", "CRITICAL"):
-                        effective_severity = "MEDIUM"
-                        confidence = 0.50
-                    else:
-                        effective_severity = base_severity
-                        confidence = 0.80
-
+                    # Verify body content for high-confidence findings
                     full_url = item.get("url", f"{url}{path}")
+                    verified = await self._verify_body(
+                        full_url, expected_ct, body_sig,
+                    )
+                    if not verified:
+                        log.debug("body_verify_fail", path=path, url=url)
+                        continue
+
                     findings.append(
                         BountyFinding(
                             target_id=0,
                             vuln_type="info_disclosure",
-                            severity=effective_severity,
-                            cvss=_CVSS_MAP.get(effective_severity, 5.0),
-                            confidence=confidence,
-                            title=f"Sensitive file: {path} (HTTP {status}) on {url}",
+                            severity=severity,
+                            cvss=_CVSS_MAP.get(severity, 5.0),
+                            confidence=0.90,
+                            title=f"Exposed: {path} (verified) on {url}",
                             description=(
-                                f"Directory fuzzing revealed {path} returning HTTP {status}. "
-                                f"Content length: {item.get('length', 'unknown')} bytes."
+                                f"Sensitive file {path} is accessible (HTTP 200) and "
+                                f"response body confirmed real content (not SPA catch-all). "
+                                f"Content length: {length} bytes."
                             ),
                             steps_to_reproduce=(
                                 f"1. Send GET request to {full_url}\n"
-                                f"2. Observe HTTP {status} response"
+                                f"2. Observe HTTP 200 with real file content"
                             ),
                             poc=full_url,
                             impact=(
-                                "Sensitive files exposed on the web server may leak "
+                                "Sensitive file exposed on the web server leaking "
                                 "credentials, source code, configuration, or internal data."
                             ),
                             suggested_fix=(
@@ -261,6 +280,51 @@ class VulnScanAgent(BaseHunterAgent):
                     )
             except Exception as e:
                 errors.append(f"ffuf {url}: {e}")
+
+    async def _get_baseline_size(self, base_url: str) -> int | None:
+        """Fetch a random path to detect SPA catch-all response size."""
+        try:
+            async with httpx_client.AsyncClient(
+                timeout=10, verify=False, follow_redirects=True,
+            ) as client:
+                resp = await client.get(
+                    f"{base_url.rstrip('/')}/jarvis_nonexistent_path_xz42q",
+                    headers={"User-Agent": _USER_AGENT},
+                )
+                if resp.status_code == 200:
+                    return len(resp.content)
+        except Exception:
+            pass
+        return None
+
+    async def _verify_body(
+        self, url: str, expected_ct: str, body_sig: str,
+    ) -> bool:
+        """Fetch URL and verify content-type + body signature."""
+        try:
+            async with httpx_client.AsyncClient(
+                timeout=10, verify=False, follow_redirects=True,
+            ) as client:
+                resp = await client.get(
+                    url, headers={"User-Agent": _USER_AGENT},
+                )
+                if resp.status_code != 200:
+                    return False
+
+                ct = (resp.headers.get("content-type") or "").lower()
+                body_text = resp.text[:5000].lower()
+
+                # Content-type must match expected prefix
+                if expected_ct and not ct.startswith(expected_ct):
+                    return False
+
+                # Body must contain expected signature
+                if body_sig and body_sig.lower() not in body_text:
+                    return False
+
+                return True
+        except Exception:
+            return False
 
     async def _open_redirect_scan(
         self,
