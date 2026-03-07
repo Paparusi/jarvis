@@ -1460,5 +1460,5 @@ header_audit_tool = ToolDefinition(
         ),
     ],
     handler=header_audit,
-    timeout_seconds=20,
+    timeout_seconds=30,
 )

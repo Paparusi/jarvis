@@ -22,7 +22,7 @@ from src.utils.logging import get_logger
 
 log = get_logger("tools.osint")
 
-_TIMEOUT = 15  # seconds
+_TIMEOUT = 25  # seconds
 _DANGEROUS_CHARS = [";", "&", "|", "`", "$", "(", ")"]
 
 _BLOCKED_HOSTS = {
@@ -633,7 +633,7 @@ async def github_leaks(query: str, search_type: str = "code") -> ToolResult:
     }
     endpoint = endpoint_map[search_type]
 
-    github_token = os.environ.get("GITHUB_TOKEN", "")
+    github_token = (os.environ.get("GITHUB_TOKEN", "") or os.environ.get("GITHUB_PERSONAL_ACCESS_TOKEN", "")).strip()
     headers: dict[str, str] = {
         "Accept": "application/vnd.github.v3+json",
         "User-Agent": "JARVIS/2.0",
@@ -870,7 +870,7 @@ wayback_lookup_tool = ToolDefinition(
         ),
     ],
     handler=wayback_lookup,
-    timeout_seconds=20,
+    timeout_seconds=30,
 )
 
 github_leaks_tool = ToolDefinition(

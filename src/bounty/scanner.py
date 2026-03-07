@@ -73,12 +73,23 @@ class VulnScanner:
         except Exception as exc:
             result.errors.append(f"waf_detect: {exc}")
 
-        # 2. Parallel scan tools
+        # 2. Build test URL with params for injection tests
+        test_url = url
+        if "?" not in url:
+            test_url = f"{url}?id=1"
+
+        # 3. Parallel scan tools
         tool_names = [t[0] for t in _SCAN_TOOLS]
 
         async def _run_scan_tool(tool_name: str) -> tuple[str, ToolResult | None]:
             try:
-                tr = await self.registry.execute(tool_name, url=url)
+                # Injection tools need URLs with params
+                tool_url = test_url if tool_name in ("sqli_test", "xss_scan", "lfi_test") else url
+                kwargs: dict[str, Any] = {"url": tool_url}
+                # lfi_test requires a 'param' argument
+                if tool_name == "lfi_test":
+                    kwargs["param"] = "id"
+                tr = await self.registry.execute(tool_name, **kwargs)
                 return tool_name, tr
             except Exception as exc:
                 result.errors.append(f"{tool_name}: {exc}")

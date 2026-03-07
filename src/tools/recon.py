@@ -680,5 +680,5 @@ tech_detect_tool = ToolDefinition(
         ),
     ],
     handler=tech_detect,
-    timeout_seconds=20,
+    timeout_seconds=30,
 )

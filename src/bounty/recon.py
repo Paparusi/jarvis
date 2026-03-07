@@ -67,8 +67,8 @@ class ReconEngine:
 
         tasks = {
             "subdomain_enum": self._run_tool("subdomain_enum", domain=domain),
-            "google_dork": self._run_tool("google_dork", query=f"site:{domain}"),
-            "wayback_lookup": self._run_tool("wayback_lookup", domain=domain),
+            "google_dork": self._run_tool("google_dork", target=domain),
+            "wayback_lookup": self._run_tool("wayback_lookup", url=f"https://{domain}"),
             "github_leaks": self._run_tool("github_leaks", query=domain),
             "tech_detect": self._run_tool("tech_detect", url=f"https://{domain}"),
             "whois": self._run_tool("whois", domain=domain),
@@ -117,7 +117,7 @@ class ReconEngine:
 
         tasks = {
             "http_headers": self._run_tool("http_headers", url=url),
-            "ssl_check": self._run_tool("ssl_check", domain=domain),
+            "ssl_check": self._run_tool("ssl_check", hostname=domain),
             "cve_lookup": self._run_tool("cve_lookup", query=domain),
         }
 
