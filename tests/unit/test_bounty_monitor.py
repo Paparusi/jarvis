@@ -239,7 +239,7 @@ class TestFetchHackerOne:
         mock_resp.json.return_value = mock_response_data
         mock_resp.raise_for_status = MagicMock()
 
-        with patch.dict("os.environ", {"HACKERONE_API_TOKEN": "test-token"}):
+        with patch.dict("os.environ", {"HACKERONE_API_TOKEN": "test-token", "HACKERONE_API_USERNAME": "testuser"}):
             with patch("src.bounty.monitor.httpx.AsyncClient") as mock_client_cls:
                 mock_client = AsyncMock()
                 mock_client.get.return_value = mock_resp

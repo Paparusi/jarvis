@@ -153,20 +153,22 @@ class ProgramMonitor:
 
         Returns a list of BountyProgram instances (not yet saved).
         """
+        username = get_env("HACKERONE_API_USERNAME")
         token = get_env("HACKERONE_API_TOKEN")
-        if not token:
-            log.warning("hackerone_token_missing")
+        if not token or not username:
+            log.warning("hackerone_credentials_missing")
             return []
 
         headers = {
-            "Authorization": f"Bearer {token}",
             "User-Agent": _USER_AGENT,
             "Accept": "application/json",
         }
 
         programs: list[BountyProgram] = []
 
-        async with httpx.AsyncClient(timeout=_TIMEOUT, headers=headers) as client:
+        async with httpx.AsyncClient(
+            timeout=_TIMEOUT, headers=headers, auth=(username, token),
+        ) as client:
             url: str | None = _HACKERONE_API_URL
             while url:
                 resp = await client.get(url)
@@ -182,7 +184,7 @@ class ProgramMonitor:
                     if attrs.get("state") != "public_mode":
                         continue
 
-                    # Extract scope domains from structured_scopes
+                    # Extract scope domains from structured_scopes (if available)
                     relationships = item.get("relationships", {})
                     scopes_data = (
                         relationships.get("structured_scopes", {})
@@ -197,11 +199,11 @@ class ProgramMonitor:
                             if identifier:
                                 domains.append(identifier)
 
-                    # Skip programs without URL scopes
-                    if not domains:
-                        continue
-
                     handle = attrs.get("handle", item.get("id", ""))
+
+                    # HackerOne API v1 often omits scopes — use handle as domain
+                    if not domains and handle:
+                        domains = [f"{handle}.com"]
                     bounty_high = int(attrs.get("top_bounty_range", 0) or 0)
                     bounty_low = int(attrs.get("low_bounty_range", 0) or 0)
                     launch_date = attrs.get("started_accepting_at", "")
@@ -234,6 +236,25 @@ class ProgramMonitor:
 
         log.info("hackerone_fetch_complete", count=len(programs))
         return programs
+
+    @staticmethod
+    async def _fetch_program_scopes(client: httpx.AsyncClient, handle: str) -> list[str]:
+        """Fetch structured scopes for a single program by handle."""
+        url = f"https://api.hackerone.com/v1/hackers/programs/{handle}"
+        resp = await client.get(url)
+        if resp.status_code != 200:
+            return []
+        data = resp.json()
+        relationships = data.get("data", {}).get("relationships", {})
+        scopes = relationships.get("structured_scopes", {}).get("data", [])
+        domains: list[str] = []
+        for scope in scopes:
+            sa = scope.get("attributes", {})
+            if sa.get("asset_type", "").upper() == "URL":
+                identifier = sa.get("asset_identifier", "")
+                if identifier:
+                    domains.append(identifier)
+        return domains
 
     async def refresh(self) -> int:
         """Fetch programs from HackerOne and save them all.
