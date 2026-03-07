@@ -194,7 +194,7 @@ _SECRET_PATTERNS: dict[str, re.Pattern] = {
     "Private Key": re.compile(r"-----BEGIN\s+(?:RSA|OPENSSH|EC|PGP|DSA)\s+PRIVATE\s+KEY"),
     "JWT Token": re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_\-]+"),
     "Heroku API Key": re.compile(r"[hH]eroku.*[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}"),
-    "Password in URL": re.compile(r"https?://[^:]+:([^@]{8,})@[a-zA-Z0-9]"),
+    "Password in URL": re.compile(r"https?://[^\s/:]{1,80}:([^\s/@]{8,64})@[a-zA-Z0-9]"),
     "AWS Secret Key": re.compile(r"(?:aws_secret_access_key|AWS_SECRET_ACCESS_KEY)\s*[=:]\s*['\"]?([A-Za-z0-9/+=]{40})['\"]?"),
     "Generic API Key": re.compile(r"(?:api[_-]?key|apikey|api_secret)\s*[=:]\s*['\"]([A-Za-z0-9\-_]{20,})['\"]"),
 }
@@ -339,7 +339,13 @@ async def open_redirect_test(url: str) -> ToolResult:
                         resp = await client.get(test_url)
                         if resp.status_code in (301, 302, 303, 307, 308):
                             location = resp.headers.get("location", "")
-                            if "evil.com" in location.lower():
+                            # Check that the redirect HOST is evil.com, not just a query param reflection
+                            loc_parsed = urlparse(location)
+                            loc_host = (loc_parsed.hostname or "").lower()
+                            # Handle protocol-relative URLs like //evil.com
+                            if not loc_host and location.lstrip("/").startswith("evil.com"):
+                                loc_host = "evil.com"
+                            if loc_host == "evil.com":
                                 found_params.add(param)
                                 findings.append({
                                     "param": param,
