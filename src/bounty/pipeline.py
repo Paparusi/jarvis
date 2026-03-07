@@ -62,18 +62,35 @@ class BountyPipeline:
     async def scan_target(self, target: BountyTarget) -> list[BountyFinding]:
         """Full pipeline for one target: recon -> scan -> verify -> estimate bounty -> dedup.
 
+        Also scans discovered subdomains (up to 5) for broader coverage.
         Returns a list of reportable, deduplicated findings.
         """
         domain = target.domain.lstrip("*.")
         url = f"https://{domain}"
 
-        # 1. Recon
+        # 1. Recon on main domain
         recon_result = await self.recon.run_full(domain, url)
 
-        # 2. Scan
+        # 2. Scan main domain
         scan_result = await self.scanner.scan(url, recon_result)
+        all_findings = list(scan_result.findings)
 
-        # 3. Look up program bounty range
+        # 3. Scan discovered subdomains (max 5, skip main domain)
+        subdomains_to_scan = [
+            s for s in recon_result.subdomains
+            if s != domain and not s.startswith("*")
+        ][:5]
+
+        for sub in subdomains_to_scan:
+            sub_url = f"https://{sub}"
+            try:
+                sub_scan = await self.scanner.scan(sub_url, recon_result)
+                all_findings.extend(sub_scan.findings)
+                log.info("subdomain_scanned", subdomain=sub, findings=len(sub_scan.findings))
+            except Exception as exc:
+                log.warning("subdomain_scan_failed", subdomain=sub, error=str(exc))
+
+        # 4. Look up program bounty range
         row = self.conn.execute(
             "SELECT bounty_low, bounty_high FROM bounty_programs WHERE id = ?",
             (target.program_id,),
@@ -81,9 +98,9 @@ class BountyPipeline:
         bounty_low = row["bounty_low"] if row else 100
         bounty_high = row["bounty_high"] if row else 5000
 
-        # 4. For each finding: set target_id, verify, estimate bounty, filter
+        # 5. For each finding: set target_id, verify, estimate bounty, filter
         reportable: list[BountyFinding] = []
-        for finding in scan_result.findings:
+        for finding in all_findings:
             finding.target_id = target.id or 0
 
             # Verify
@@ -96,13 +113,14 @@ class BountyPipeline:
             if finding.should_report:
                 reportable.append(finding)
 
-        # 5. Dedup
+        # 6. Dedup
         deduped = self.verifier.dedup_findings(reportable)
 
         log.info(
             "scan_target_complete",
             domain=domain,
-            raw=len(scan_result.findings),
+            subdomains_scanned=len(subdomains_to_scan),
+            raw=len(all_findings),
             reportable=len(reportable),
             deduped=len(deduped),
         )
