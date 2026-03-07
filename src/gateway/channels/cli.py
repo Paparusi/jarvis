@@ -128,7 +128,7 @@ class CLIAdapter:
 ╚══════════════════════════════════════╝{_RESET}
 
   {_DIM}Skills: {skills_count} | Tools: {tools_count} | Memory: ON{_RESET}
-  {_DIM}Commands: /status /stats /profile /health /memory /skills /train /eval /digest /dreamtime /reset /quit{_RESET}
+  {_DIM}Commands: /status /stats /profile /health /memory /skills /train /eval /digest /pentest /dreamtime /reset /quit{_RESET}
   {_DIM}Gõ tin nhắn rồi Enter để chat.{_RESET}
 """)
 
@@ -173,6 +173,9 @@ class CLIAdapter:
 
         elif cmd.startswith("/digest"):
             await self._cmd_digest(cmd)
+
+        elif cmd.startswith("/pentest"):
+            await self._cmd_pentest(cmd)
 
         elif cmd == "/reset":
             self._session.messages.clear()
@@ -648,6 +651,67 @@ class CLIAdapter:
 
         print(f"\n{_GREEN}✅ Dreamtime cycle complete!{_RESET}")
 
+    async def _cmd_pentest(self, cmd: str) -> None:
+        """Run autonomous pentest pipeline."""
+        args = cmd.replace("/pentest", "").strip()
+
+        if not args:
+            print(f"""
+{_BOLD}Usage:{_RESET} /pentest <target> [scope]
+
+{_DIM}Scopes: full (default), quick, web_only, network_only, recon_only{_RESET}
+
+Examples:
+  /pentest example.com
+  /pentest example.com quick
+  /pentest https://example.com web_only
+""")
+            return
+
+        parts = args.split()
+        target = parts[0]
+        scope = parts[1] if len(parts) > 1 else "full"
+
+        valid_scopes = {"full", "quick", "web_only", "network_only", "recon_only"}
+        if scope not in valid_scopes:
+            print(f"{_RED}Scope không hợp lệ: {scope}{_RESET}")
+            print(f"Chọn: {', '.join(sorted(valid_scopes))}")
+            return
+
+        print(f"\n{_CYAN}🔍 Pentest: {target} (scope: {scope}){_RESET}\n")
+
+        from src.intelligence.pentest import PentestPipeline
+        from src.intelligence.report_generator import ReportGenerator
+
+        pipeline = PentestPipeline(self._tool_registry)
+
+        def on_progress(phase: str, msg: str) -> None:
+            print(f"  {_DIM}{msg}{_RESET}")
+
+        pipeline.set_progress_callback(on_progress)
+
+        try:
+            report = await pipeline.run(target, scope=scope)
+
+            # Print summary
+            summary = ReportGenerator.generate_summary(report)
+            score_colors = {"A": _GREEN, "B": _CYAN, "C": _YELLOW, "D": _YELLOW, "F": _RED}
+            color = score_colors.get(report.score, _RESET)
+            print(f"\n{color}{_BOLD}{'=' * 50}")
+            print(summary)
+            print(f"{'=' * 50}{_RESET}")
+
+            # Save full report
+            report_path = f"/tmp/jarvis_pentest_{target.replace('/', '_')}.md"
+            full_report = ReportGenerator.generate_markdown(report)
+            with open(report_path, "w") as f:
+                f.write(full_report)
+
+            print(f"\n{_DIM}📋 Full report saved: {report_path}{_RESET}")
+
+        except Exception as e:
+            print(f"{_RED}❌ Pentest error: {e}{_RESET}")
+
     def _cmd_help(self) -> None:
         print(f"""
 {_BOLD}JARVIS CLI Commands:{_RESET}
@@ -662,6 +726,7 @@ class CLIAdapter:
   /train     — Training data (/train now [4b|14b])
   /eval      — Benchmark model quality
   /digest    — Daily news digest (topics từ sở thích)
+  /pentest   — Pentest tự động: /pentest <target> [scope]
   /dreamtime — Chạy Dreamtime cycle
   /reset     — Reset trò chuyện
   /quit      — Thoát

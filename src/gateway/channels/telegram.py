@@ -320,6 +320,7 @@ class TelegramAdapter:
         self._app.add_handler(CommandHandler("swarm", self._handle_swarm))
         self._app.add_handler(CommandHandler("eval", self._handle_eval))
         self._app.add_handler(CommandHandler("digest", self._handle_digest))
+        self._app.add_handler(CommandHandler("pentest", self._handle_pentest))
         self._app.add_handler(CallbackQueryHandler(self._handle_feedback))
         self._app.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message)
@@ -1964,6 +1965,102 @@ class TelegramAdapter:
         except Exception as e:
             log.error("eval_command_error", error=str(e))
             await status_msg.edit_text(f"❌ Evaluation error: {e}")
+
+    async def _handle_pentest(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """/pentest <target> [scope] — Run autonomous pentest pipeline."""
+        if not self._is_authorized(update):
+            return
+
+        text = (update.message.text or "").replace("/pentest", "").strip()
+
+        if not text:
+            await update.message.reply_text(
+                "Usage: `/pentest <target> [scope]`\n\n"
+                "Scopes: `full` (default), `quick`, `web_only`, `network_only`, `recon_only`\n\n"
+                "Ví dụ:\n"
+                "  `/pentest example.com`\n"
+                "  `/pentest example.com quick`\n"
+                "  `/pentest https://example.com web_only`",
+                parse_mode="Markdown",
+            )
+            return
+
+        parts = text.split()
+        target = parts[0]
+        scope = parts[1] if len(parts) > 1 else "full"
+
+        valid_scopes = {"full", "quick", "web_only", "network_only", "recon_only"}
+        if scope not in valid_scopes:
+            await update.message.reply_text(
+                f"Scope không hợp lệ: `{scope}`\n"
+                f"Chọn: {', '.join(f'`{s}`' for s in sorted(valid_scopes))}",
+                parse_mode="Markdown",
+            )
+            return
+
+        status_msg = await update.message.reply_text(
+            f"🔍 Pentest đang chạy: `{target}` (scope: {scope})...",
+            parse_mode="Markdown",
+        )
+
+        try:
+            from src.intelligence.pentest import PentestPipeline
+            from src.intelligence.report_generator import ReportGenerator
+
+            pipeline = PentestPipeline(self._tool_registry)
+
+            # Progress callback to update Telegram message
+            last_update = [0.0]
+
+            def on_progress(phase: str, msg: str) -> None:
+                import time
+                now = time.time()
+                # Throttle updates to every 2 seconds
+                if now - last_update[0] < 2.0:
+                    return
+                last_update[0] = now
+                try:
+                    asyncio.get_event_loop().create_task(
+                        status_msg.edit_text(
+                            f"🔍 Pentest: `{target}`\n{msg}",
+                            parse_mode="Markdown",
+                        )
+                    )
+                except Exception:
+                    pass
+
+            pipeline.set_progress_callback(on_progress)
+            report = await pipeline.run(target, scope=scope)
+
+            # Generate summary for Telegram (keep it short)
+            summary = ReportGenerator.generate_summary(report)
+
+            score_emoji = {"A": "🟢", "B": "🔵", "C": "🟡", "D": "🟠", "F": "🔴"}.get(report.score, "⚪")
+            header = f"{score_emoji} **Pentest Complete: {target}**\n"
+
+            content = f"{header}\n```\n{summary}\n```"
+
+            if len(content) > 4000:
+                content = content[:4000] + "\n...(truncated)"
+
+            await status_msg.edit_text(content, parse_mode="Markdown")
+
+            # Also save full report to file
+            full_report = ReportGenerator.generate_markdown(report)
+            import tempfile
+            report_path = f"/tmp/jarvis_pentest_{target.replace('/', '_')}_{int(report.end_time)}.md"
+            with open(report_path, "w") as f:
+                f.write(full_report)
+
+            await update.message.reply_document(
+                document=open(report_path, "rb"),
+                filename=f"pentest_{target.replace('/', '_')}.md",
+                caption=f"📋 Full pentest report — {len(report.all_findings)} findings, score {report.score}",
+            )
+
+        except Exception as e:
+            log.error("pentest_command_error", target=target, error=str(e))
+            await status_msg.edit_text(f"❌ Pentest error: {e}")
 
     async def _handle_digest(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """/digest [topics] — Generate daily news digest on demand."""
