@@ -5,6 +5,7 @@ Fetches, scores, and stores bug bounty programs from HackerOne.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 from datetime import datetime, timezone
@@ -200,10 +201,6 @@ class ProgramMonitor:
                                 domains.append(identifier)
 
                     handle = attrs.get("handle", item.get("id", ""))
-
-                    # HackerOne API v1 often omits scopes — use handle as domain
-                    if not domains and handle:
-                        domains = [f"{handle}.com"]
                     bounty_high = int(attrs.get("top_bounty_range", 0) or 0)
                     bounty_low = int(attrs.get("low_bounty_range", 0) or 0)
                     launch_date = attrs.get("started_accepting_at", "")
@@ -234,27 +231,52 @@ class ProgramMonitor:
                 # Pagination
                 url = data.get("links", {}).get("next")
 
-        log.info("hackerone_fetch_complete", count=len(programs))
-        return programs
+            # Fetch real scopes for programs that only have fallback domains
+            sem = asyncio.Semaphore(5)
+
+            async def _enrich(prog: BountyProgram) -> None:
+                async with sem:
+                    scopes = await self._fetch_program_scopes(client, prog.program_id)
+                    if scopes:
+                        prog.scope_domains = scopes
+
+            needs_scopes = [p for p in programs if not p.scope_domains]
+            if needs_scopes:
+                log.info("fetching_scopes", count=len(needs_scopes))
+                await asyncio.gather(
+                    *[_enrich(p) for p in needs_scopes],
+                    return_exceptions=True,
+                )
+
+            # Drop programs with no real scope
+            enriched = [p for p in programs if p.scope_domains]
+            log.info(
+                "hackerone_fetch_complete",
+                total=len(programs),
+                with_scopes=len(enriched),
+            )
+            return enriched
 
     @staticmethod
     async def _fetch_program_scopes(client: httpx.AsyncClient, handle: str) -> list[str]:
-        """Fetch structured scopes for a single program by handle."""
-        url = f"https://api.hackerone.com/v1/hackers/programs/{handle}"
-        resp = await client.get(url)
-        if resp.status_code != 200:
+        """Fetch structured scopes for a single program via /structured_scopes endpoint."""
+        url = f"https://api.hackerone.com/v1/hackers/programs/{handle}/structured_scopes"
+        try:
+            resp = await client.get(url)
+            if resp.status_code != 200:
+                return []
+            data = resp.json()
+            domains: list[str] = []
+            for scope in data.get("data", []):
+                sa = scope.get("attributes", {})
+                asset_type = sa.get("asset_type", "").upper()
+                if asset_type in ("URL", "WILDCARD"):
+                    identifier = sa.get("asset_identifier", "")
+                    if identifier:
+                        domains.append(identifier)
+            return domains
+        except Exception:
             return []
-        data = resp.json()
-        relationships = data.get("data", {}).get("relationships", {})
-        scopes = relationships.get("structured_scopes", {}).get("data", [])
-        domains: list[str] = []
-        for scope in scopes:
-            sa = scope.get("attributes", {})
-            if sa.get("asset_type", "").upper() == "URL":
-                identifier = sa.get("asset_identifier", "")
-                if identifier:
-                    domains.append(identifier)
-        return domains
 
     async def refresh(self) -> int:
         """Fetch programs from HackerOne and save them all.
