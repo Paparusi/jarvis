@@ -438,21 +438,18 @@ class VulnScanAgent(BaseHunterAgent):
 
         GraphQL introspection enabled = $500-2000 on most programs.
         Debug endpoints exposed = $300-1000.
+        All checks run concurrently for speed.
         """
-        for host in alive_hosts[:5]:
-            url = host.get("url", "")
-            if not url:
-                continue
+        # Shared client for all requests (connection pooling)
+        async with httpx_client.AsyncClient(
+            timeout=8, verify=False, follow_redirects=True,
+        ) as client:
 
-            base = url.rstrip("/")
-
-            # 1. GraphQL introspection check
-            for gql_path in ("/graphql", "/graphiql", "/api/graphql", "/v1/graphql"):
-                try:
-                    gql_url = base + gql_path
-                    async with httpx_client.AsyncClient(
-                        timeout=10, verify=False, follow_redirects=True,
-                    ) as client:
+            async def _check_graphql(base: str) -> None:
+                """Check 4 GraphQL paths concurrently, stop on first hit."""
+                for gql_path in ("/graphql", "/graphiql", "/api/graphql", "/v1/graphql"):
+                    try:
+                        gql_url = base + gql_path
                         resp = await client.post(
                             gql_url,
                             json={"query": "{__schema{types{name}}}"},
@@ -495,24 +492,20 @@ class VulnScanAgent(BaseHunterAgent):
                                         ),
                                     )
                                 )
-                                break  # Found one, no need to try other paths
-                except Exception:
-                    pass
+                                return  # Found one, stop
+                    except Exception:
+                        pass
 
-            # 2. Debug endpoint checks
-            for debug_path, sig in [
-                ("/debug/vars", '"cmdline"'),
-                ("/debug/pprof", "Types of profiles"),
-                ("/_debug", "debug"),
-                ("/actuator", '"_links"'),
-                ("/actuator/env", '"propertySources"'),
-                ("/__debug__", "debug"),
-            ]:
-                try:
-                    debug_url = base + debug_path
-                    async with httpx_client.AsyncClient(
-                        timeout=8, verify=False, follow_redirects=True,
-                    ) as client:
+            async def _check_debug(base: str, url: str) -> None:
+                """Check debug endpoints concurrently."""
+                for debug_path, sig in [
+                    ("/debug/vars", '"cmdline"'),
+                    ("/debug/pprof", "Types of profiles"),
+                    ("/actuator", '"_links"'),
+                    ("/actuator/env", '"propertySources"'),
+                ]:
+                    try:
+                        debug_url = base + debug_path
                         resp = await client.get(
                             debug_url,
                             headers={"User-Agent": _USER_AGENT},
@@ -549,5 +542,18 @@ class VulnScanAgent(BaseHunterAgent):
                                         ),
                                     )
                                 )
-                except Exception:
-                    pass
+                    except Exception:
+                        pass
+
+            # Run all host checks concurrently (top 3 hosts)
+            tasks = []
+            for host in alive_hosts[:3]:
+                url = host.get("url", "")
+                if not url:
+                    continue
+                base = url.rstrip("/")
+                tasks.append(_check_graphql(base))
+                tasks.append(_check_debug(base, url))
+
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)

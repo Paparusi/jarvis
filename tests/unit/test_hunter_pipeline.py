@@ -332,8 +332,10 @@ class TestHunt:
 
         await pipeline.hunt("test.com", mode="full")
 
-        # Should have been called at least twice per agent (start + done)
-        assert progress_fn.call_count >= 14  # 7 agents * 2 calls each
+        # Should have been called at least twice per agent that ran (start + done)
+        # With budget system, some agents may be skipped, but at least recon +
+        # livescan + vuln_scanner + reporter should always run.
+        assert progress_fn.call_count >= 8  # at least 4 agents * 2 calls
         # Check that agent names appear in calls
         all_call_args = [c[0][0] for c in progress_fn.call_args_list]
         assert "recon" in all_call_args

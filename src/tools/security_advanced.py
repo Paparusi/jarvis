@@ -472,7 +472,7 @@ async def nuclei_scan(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
         if proc.returncode not in (0, None):
             err_msg = stderr.decode().strip()[:500] if stderr else f"exit code {proc.returncode}"
             elapsed = int((time.time() - start) * 1000)

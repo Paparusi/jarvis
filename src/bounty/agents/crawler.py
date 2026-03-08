@@ -42,8 +42,9 @@ class CrawlerAgent(BaseHunterAgent):
                 start_time=start,
             )
 
-        # Take top 5 by priority (most interesting hosts first)
-        top_hosts = alive_hosts[:5]
+        # Take top 3 by priority (most interesting hosts first)
+        # Fewer hosts = faster pipeline, more time for vuln scanning
+        top_hosts = alive_hosts[:3]
 
         all_urls: set[str] = set()
         all_js: set[str] = set()
@@ -81,8 +82,17 @@ class CrawlerAgent(BaseHunterAgent):
 
                 return host_urls, host_js, host_endpoints
 
+        # Per-host timeout: 35s each (3 hosts × 35s = 105s worst case)
+        async def _crawl_with_timeout(host: dict) -> tuple[set[str], set[str], set[str]]:
+            try:
+                return await asyncio.wait_for(_crawl_host(host), timeout=35)
+            except asyncio.TimeoutError:
+                url = host.get("url", "?")
+                errors.append(f"crawl timeout: {url}")
+                return set(), set(), set()
+
         results = await asyncio.gather(
-            *[_crawl_host(h) for h in top_hosts],
+            *[_crawl_with_timeout(h) for h in top_hosts],
             return_exceptions=True,
         )
 

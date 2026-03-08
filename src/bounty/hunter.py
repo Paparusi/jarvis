@@ -77,7 +77,24 @@ class HunterPipeline:
                 pass
 
     # Pipeline timeout per mode (seconds)
-    _MODE_TIMEOUTS = {"quick": 120, "full": 480, "deep": 600}
+    _MODE_TIMEOUTS = {"quick": 120, "full": 600, "deep": 900}
+
+    # Per-agent max time budget (seconds).  Prevents any single agent from
+    # consuming the entire pipeline budget.
+    _AGENT_MAX = {
+        "recon": 120,
+        "livescan": 60,
+        "crawler": 120,
+        "js_analyzer": 60,
+        "vuln_scanner": 180,
+        "ai_analyzer": 60,
+        "reporter": 30,
+    }
+
+    # Agents that MUST run — we reserve enough time for them by skipping
+    # optional agents (crawler, js_analyzer) when the budget is tight.
+    _MUST_RUN = {"vuln_scanner", "ai_analyzer", "reporter"}
+    _MUST_RUN_RESERVE = 200  # seconds reserved for must-run agents
 
     async def hunt(
         self,
@@ -88,12 +105,12 @@ class HunterPipeline:
         """Run the hunting pipeline on a domain.
 
         Modes:
-            full  — All 7 agents (timeout 480s)
+            full  — All 7 agents (timeout 600s)
             quick — Recon + LiveScan only (timeout 120s)
-            deep  — Full pipeline + autonomous deep scan (timeout 600s)
+            deep  — Full pipeline + autonomous deep scan (timeout 900s)
         """
         start = time.time()
-        pipeline_timeout = self._MODE_TIMEOUTS.get(mode, 480)
+        pipeline_timeout = self._MODE_TIMEOUTS.get(mode, 600)
         context: dict[str, Any] = {"domain": domain, "program": program}
         all_agent_results: list[AgentResult] = []
 
@@ -110,7 +127,8 @@ class HunterPipeline:
 
             # Check pipeline-level timeout before each agent
             elapsed_so_far = time.time() - start
-            if elapsed_so_far > pipeline_timeout:
+            remaining = pipeline_timeout - elapsed_so_far
+            if remaining < 20:
                 log.warning(
                     "pipeline_timeout",
                     domain=domain,
@@ -124,13 +142,36 @@ class HunterPipeline:
                 )
                 break
 
+            # Skip optional agents if doing so is needed to protect the
+            # budget for must-run agents (vuln_scanner, ai_analyzer, reporter).
+            if agent_name not in self._MUST_RUN:
+                # After this agent runs, will there be enough time for must-run?
+                agent_budget = min(remaining, self._AGENT_MAX.get(agent_name, 180))
+                time_after_agent = remaining - agent_budget
+                if time_after_agent < self._MUST_RUN_RESERVE and agent_name in ("crawler", "js_analyzer"):
+                    log.info(
+                        "agent_skipped_budget",
+                        agent=agent_name,
+                        remaining=int(remaining),
+                        reserve=self._MUST_RUN_RESERVE,
+                    )
+                    self._report_progress(
+                        agent_name,
+                        f"Skipping {agent_name} — reserving time for vuln scanning",
+                    )
+                    continue
+
             self._report_progress(agent_name, f"Running {agent_name} agent...")
 
             try:
-                # Per-agent timeout: remaining pipeline time
-                remaining = max(30, pipeline_timeout - int(elapsed_so_far))
+                # Per-agent timeout: min(remaining, agent max budget)
+                agent_timeout = min(
+                    remaining,
+                    self._AGENT_MAX.get(agent_name, 180),
+                )
+                agent_timeout = max(30, agent_timeout)
                 result = await asyncio.wait_for(
-                    agent.run(context), timeout=remaining,
+                    agent.run(context), timeout=agent_timeout,
                 )
                 all_agent_results.append(result)
 
@@ -189,7 +230,7 @@ class HunterPipeline:
         deep_performed = False
         if mode == "deep":
             remaining = pipeline_timeout - (time.time() - start)
-            if remaining > 60:  # Only deep scan if enough time left
+            if remaining > 120:  # Only deep scan if enough time left
                 deep_targets = context.get("deep_scan_targets", [])
                 if deep_targets:
                     self._report_progress("deep_scan", f"Deep scanning {len(deep_targets[:3])} targets...")
