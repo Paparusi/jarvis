@@ -30,18 +30,21 @@ class LiveScanAgent(BaseHunterAgent):
                 start_time=start,
             )
 
-        # 1. httpx probe subdomains in batches (200 per batch to avoid timeout)
+        # Cap at 150 subdomains (ReconAgent already prioritizes interesting ones)
+        # Probing 500+ subdomains takes 300s+ and leaves no time for vuln scanning
+        probed = subdomains[:150]
+        if len(subdomains) > 150:
+            log.info("livescan_capped", total=len(subdomains), probed=150)
+
+        # 1. httpx probe subdomains (single batch for ≤200 targets)
         alive = []
-        batch_size = 200
-        for i in range(0, len(subdomains), batch_size):
-            batch = subdomains[i : i + batch_size]
-            targets = "\n".join(batch)
-            try:
-                result = await self.registry.execute("httpx_probe", targets=targets)
-                if result.success:
-                    alive.extend(result.data.get("alive", []))
-            except Exception as e:
-                errors.append(f"httpx_probe batch {i // batch_size}: {e}")
+        targets = "\n".join(probed)
+        try:
+            result = await self.registry.execute("httpx_probe", targets=targets)
+            if result.success:
+                alive.extend(result.data.get("alive", []))
+        except Exception as e:
+            errors.append(f"httpx_probe: {e}")
 
         # 2. Classify each host by priority
         for host in alive:
@@ -50,14 +53,15 @@ class LiveScanAgent(BaseHunterAgent):
         # 3. Sort by priority (highest first)
         alive.sort(key=lambda h: h.get("priority", 0), reverse=True)
 
-        log.info("livescan_complete", alive=len(alive), total=len(subdomains))
+        log.info("livescan_complete", alive=len(alive), probed=len(probed),
+                 total=len(subdomains))
 
         return self._make_result(
             success=True,
             data={
                 "alive_hosts": alive,
                 "alive_count": len(alive),
-                "dead_count": len(subdomains) - len(alive),
+                "dead_count": len(probed) - len(alive),
             },
             errors=errors,
             start_time=start,
