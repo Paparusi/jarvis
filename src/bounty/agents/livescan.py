@@ -30,11 +30,11 @@ class LiveScanAgent(BaseHunterAgent):
                 start_time=start,
             )
 
-        # Cap at 150 subdomains (ReconAgent already prioritizes interesting ones)
-        # Probing 500+ subdomains takes 300s+ and leaves no time for vuln scanning
-        probed = subdomains[:150]
-        if len(subdomains) > 150:
-            log.info("livescan_capped", total=len(subdomains), probed=150)
+        # Cap at 100 subdomains (ReconAgent already prioritizes interesting ones)
+        # httpx with 30 threads needs ~60s for 100 targets, fits in 120s budget
+        probed = subdomains[:100]
+        if len(subdomains) > 100:
+            log.info("livescan_capped", total=len(subdomains), probed=100)
 
         # 1. httpx probe subdomains (single batch for ≤200 targets)
         alive = []

@@ -83,7 +83,7 @@ class HunterPipeline:
     # consuming the entire pipeline budget.
     _AGENT_MAX = {
         "recon": 120,
-        "livescan": 60,
+        "livescan": 120,
         "crawler": 120,
         "js_analyzer": 60,
         "vuln_scanner": 180,
