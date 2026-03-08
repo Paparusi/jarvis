@@ -2,9 +2,10 @@
 
 Runs automated vulnerability checks against discovered assets:
 - Subdomain takeover detection on enumerated subdomains
-- Nuclei template scanning (CVEs, misconfigs, exposed panels)
+- Tech-aware nuclei template scanning (CVEs, misconfigs, exposed panels)
 - Directory fuzzing with ffuf + body verification for sensitive files
 - Open redirect testing on discovered endpoints
+- Security header analysis (missing HSTS, CSP, X-Frame-Options)
 """
 
 from __future__ import annotations
@@ -22,6 +23,67 @@ log = get_logger("bounty.agents.vuln_scanner")
 
 # CVSS score mapping by severity string
 _CVSS_MAP = {"CRITICAL": 9.5, "HIGH": 8.0, "MEDIUM": 5.5, "LOW": 3.0}
+
+# Base templates always scanned (low overhead, high signal)
+_BASE_TEMPLATES = "exposed-panels,takeovers,misconfigurations,exposures,default-logins"
+
+# Map httpx-detected tech → additional nuclei template categories to scan
+# Keys are lowercased substrings matched against host["tech"] entries
+_TECH_TO_TEMPLATES: dict[str, list[str]] = {
+    # Web servers
+    "apache": ["vulnerabilities", "cves"],
+    "nginx": ["vulnerabilities", "cves"],
+    "iis": ["vulnerabilities", "cves"],
+    "tomcat": ["vulnerabilities", "cves"],
+    "caddy": ["vulnerabilities"],
+    # Languages / Frameworks
+    "php": ["vulnerabilities", "cves"],
+    "wordpress": ["vulnerabilities", "cves"],
+    "drupal": ["vulnerabilities", "cves"],
+    "joomla": ["vulnerabilities", "cves"],
+    "laravel": ["vulnerabilities"],
+    "django": ["vulnerabilities"],
+    "rails": ["vulnerabilities"],
+    "spring": ["vulnerabilities", "cves"],
+    "express": ["vulnerabilities"],
+    "next.js": ["vulnerabilities"],
+    "nuxt": ["vulnerabilities"],
+    # CMS / Platforms
+    "confluence": ["vulnerabilities", "cves"],
+    "jira": ["vulnerabilities", "cves"],
+    "gitlab": ["vulnerabilities", "cves"],
+    "jenkins": ["vulnerabilities", "cves"],
+    "grafana": ["vulnerabilities", "cves"],
+    "kibana": ["vulnerabilities", "cves"],
+    "sonarqube": ["vulnerabilities", "cves"],
+    "sharepoint": ["vulnerabilities", "cves"],
+    # Infrastructure
+    "docker": ["vulnerabilities"],
+    "kubernetes": ["vulnerabilities"],
+    "elastic": ["vulnerabilities", "cves"],
+    "redis": ["vulnerabilities"],
+    "mongodb": ["vulnerabilities"],
+}
+
+# Required security headers and their severities
+_SECURITY_HEADERS: dict[str, tuple[str, str]] = {
+    "strict-transport-security": (
+        "MEDIUM",
+        "Missing HSTS header. Site vulnerable to SSL stripping attacks.",
+    ),
+    "content-security-policy": (
+        "LOW",
+        "Missing CSP header. Site more vulnerable to XSS attacks.",
+    ),
+    "x-frame-options": (
+        "LOW",
+        "Missing X-Frame-Options. Site may be vulnerable to clickjacking.",
+    ),
+    "x-content-type-options": (
+        "LOW",
+        "Missing X-Content-Type-Options. Browser may MIME-sniff responses.",
+    ),
+}
 
 # Sensitive paths: (severity, expected_content_type_prefix, body_signature)
 # body_signature: if present in response body, confirms it's real (not SPA catch-all)
@@ -74,6 +136,7 @@ class VulnScanAgent(BaseHunterAgent):
             tasks.append(self._ffuf_scan(alive_hosts, findings, errors))
             tasks.append(self._cors_scan(alive_hosts, findings, errors))
             tasks.append(self._api_misconfig_scan(alive_hosts, findings, errors))
+            tasks.append(self._security_header_scan(alive_hosts, findings, errors))
         if endpoints:
             tasks.append(self._open_redirect_scan(endpoints, findings, errors))
 
@@ -153,23 +216,40 @@ class VulnScanAgent(BaseHunterAgent):
         except Exception as e:
             errors.append(f"takeover: {e}")
 
+    def _build_templates_for_host(self, host: dict) -> str:
+        """Build nuclei template string based on detected tech stack.
+
+        Always includes base templates. Adds CVE/vulnerability templates
+        when httpx detects specific technologies (e.g. Apache, WordPress).
+        """
+        templates = set(_BASE_TEMPLATES.split(","))
+        tech_list = host.get("tech") or []
+        for tech_name in tech_list:
+            tech_lower = tech_name.lower()
+            for key, extra_templates in _TECH_TO_TEMPLATES.items():
+                if key in tech_lower:
+                    templates.update(extra_templates)
+        return ",".join(sorted(templates))
+
     async def _nuclei_scan(
         self,
         alive_hosts: list[dict],
         findings: list[BountyFinding],
         errors: list[str],
     ) -> None:
-        """Run nuclei template scans on top alive hosts (parallel)."""
-        urls = [h.get("url", "") for h in alive_hosts[:3] if h.get("url")]
-        if not urls:
+        """Run tech-aware nuclei template scans on top alive hosts (parallel)."""
+        top_hosts = [h for h in alive_hosts[:3] if h.get("url")]
+        if not top_hosts:
             return
 
-        async def _scan_one(url: str) -> None:
+        async def _scan_one(host: dict) -> None:
+            url = host["url"]
+            templates = self._build_templates_for_host(host)
             try:
                 result = await self.registry.execute(
                     "nuclei_scan",
                     url=url,
-                    templates="exposed-panels,takeovers,misconfigurations",
+                    templates=templates,
                 )
                 if not result.success or result.data.get("count", 0) == 0:
                     return
@@ -194,7 +274,7 @@ class VulnScanAgent(BaseHunterAgent):
             except Exception as e:
                 errors.append(f"nuclei {url}: {e}")
 
-        await asyncio.gather(*[_scan_one(u) for u in urls], return_exceptions=True)
+        await asyncio.gather(*[_scan_one(h) for h in top_hosts], return_exceptions=True)
 
     async def _ffuf_scan(
         self,
@@ -555,5 +635,79 @@ class VulnScanAgent(BaseHunterAgent):
                 tasks.append(_check_graphql(base))
                 tasks.append(_check_debug(base, url))
 
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _security_header_scan(
+        self,
+        alive_hosts: list[dict],
+        findings: list[BountyFinding],
+        errors: list[str],
+    ) -> None:
+        """Check top hosts for missing security headers.
+
+        Missing HSTS is MEDIUM severity on most programs ($100-500).
+        Missing CSP/X-Frame-Options are LOW but still worth flagging.
+        Only reports on HTTPS hosts with 200 responses.
+        """
+        async with httpx_client.AsyncClient(
+            timeout=8, verify=False, follow_redirects=True,
+        ) as client:
+
+            async def _check_host(host: dict) -> None:
+                url = host.get("url", "")
+                if not url or not url.startswith("https://"):
+                    return
+                try:
+                    resp = await client.get(
+                        url, headers={"User-Agent": _USER_AGENT},
+                    )
+                    if resp.status_code != 200:
+                        return
+                    resp_headers = {k.lower(): v for k, v in resp.headers.items()}
+                    missing = []
+                    for header, (severity, desc) in _SECURITY_HEADERS.items():
+                        if header not in resp_headers:
+                            missing.append((header, severity, desc))
+                    # Only report if HSTS is missing (most impactful)
+                    if not any(h == "strict-transport-security" for h, _, _ in missing):
+                        return
+                    header_list = ", ".join(h for h, _, _ in missing)
+                    findings.append(
+                        BountyFinding(
+                            target_id=0,
+                            vuln_type="missing_security_headers",
+                            severity="MEDIUM",
+                            cvss=4.3,
+                            confidence=0.95,
+                            title=f"Missing security headers on {url}",
+                            description=(
+                                f"The following security headers are missing: {header_list}. "
+                                + " ".join(d for _, _, d in missing)
+                            ),
+                            steps_to_reproduce=(
+                                f"1. Send GET request to {url}\n"
+                                f"2. Inspect response headers\n"
+                                f"3. Observe missing: {header_list}"
+                            ),
+                            poc=f"curl -I {url}",
+                            impact=(
+                                "Missing security headers reduce defense-in-depth. "
+                                "HSTS prevents SSL stripping, CSP mitigates XSS, "
+                                "X-Frame-Options prevents clickjacking."
+                            ),
+                            suggested_fix=(
+                                "Add the following response headers: "
+                                "Strict-Transport-Security: max-age=31536000; includeSubDomains, "
+                                "Content-Security-Policy: default-src 'self', "
+                                "X-Frame-Options: DENY, "
+                                "X-Content-Type-Options: nosniff"
+                            ),
+                        )
+                    )
+                except Exception:
+                    pass
+
+            tasks = [_check_host(h) for h in alive_hosts[:5]]
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)

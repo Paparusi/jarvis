@@ -576,6 +576,7 @@ class TestVulnScanAgent:
         agent = VulnScanAgent(registry)
         # Stub out direct HTTP methods to avoid real requests in tests
         agent._api_misconfig_scan = AsyncMock()
+        agent._security_header_scan = AsyncMock()
         result = await agent.run({
             "alive_hosts": [{"url": "https://test.com", "priority": 5}],
             "endpoints": ["https://test.com/login?next="],
@@ -614,6 +615,7 @@ class TestVulnScanAgent:
         registry.execute = AsyncMock(side_effect=_mock_exec)
         agent = VulnScanAgent(registry)
         agent._api_misconfig_scan = AsyncMock()
+        agent._security_header_scan = AsyncMock()
         result = await agent.run({
             "alive_hosts": [{"url": "https://test.com", "priority": 5}],
             "endpoints": [],
@@ -648,6 +650,7 @@ class TestVulnScanAgent:
         registry.execute = AsyncMock(side_effect=_mock_exec)
         agent = VulnScanAgent(registry)
         agent._api_misconfig_scan = AsyncMock()
+        agent._security_header_scan = AsyncMock()
         result = await agent.run({
             "alive_hosts": [{"url": "https://test.com", "priority": 5}],
             "endpoints": ["https://test.com/login"],
@@ -682,6 +685,7 @@ class TestVulnScanAgent:
         registry.execute = AsyncMock(side_effect=_mock_exec)
         agent = VulnScanAgent(registry)
         agent._api_misconfig_scan = AsyncMock()
+        agent._security_header_scan = AsyncMock()
         result = await agent.run({
             "alive_hosts": [{"url": "https://test.com", "priority": 5}],
             "endpoints": [],
@@ -713,6 +717,7 @@ class TestVulnScanAgent:
         registry.execute = AsyncMock(side_effect=_mock_exec)
         agent = VulnScanAgent(registry)
         agent._api_misconfig_scan = AsyncMock()
+        agent._security_header_scan = AsyncMock()
         result = await agent.run({
             "alive_hosts": [{"url": "https://test.com", "priority": 5}],
             "endpoints": [],
@@ -744,6 +749,7 @@ class TestVulnScanAgent:
         registry.execute = AsyncMock(side_effect=_mock_exec)
         agent = VulnScanAgent(registry)
         agent._api_misconfig_scan = AsyncMock()
+        agent._security_header_scan = AsyncMock()
         # Mock _get_baseline_size to return SPA-like size
         agent._get_baseline_size = AsyncMock(return_value=50000)
         # Mock _verify_body to not make real HTTP requests
@@ -758,6 +764,162 @@ class TestVulnScanAgent:
         assert result.success is True
         # SPA catch-all should be filtered out
         assert len(result.findings) == 0
+
+    def test_build_templates_no_tech(self, registry):
+        """Without tech info, only base templates are selected."""
+        agent = VulnScanAgent(registry)
+        host = {"url": "https://test.com"}
+        templates = agent._build_templates_for_host(host)
+        parts = set(templates.split(","))
+        assert "exposed-panels" in parts
+        assert "takeovers" in parts
+        assert "misconfigurations" in parts
+        assert "exposures" in parts
+        assert "default-logins" in parts
+        # No tech → no CVE/vulnerability templates
+        assert "cves" not in parts
+        assert "vulnerabilities" not in parts
+
+    def test_build_templates_with_tech(self, registry):
+        """Tech-aware template selection adds CVE/vulnerability templates."""
+        agent = VulnScanAgent(registry)
+        host = {"url": "https://test.com", "tech": ["Apache", "PHP", "WordPress"]}
+        templates = agent._build_templates_for_host(host)
+        parts = set(templates.split(","))
+        # Base templates always present
+        assert "exposed-panels" in parts
+        assert "takeovers" in parts
+        # Tech-specific templates added
+        assert "cves" in parts
+        assert "vulnerabilities" in parts
+
+    def test_build_templates_unknown_tech(self, registry):
+        """Unknown tech entries don't add extra templates."""
+        agent = VulnScanAgent(registry)
+        host = {"url": "https://test.com", "tech": ["UnknownFramework123"]}
+        templates = agent._build_templates_for_host(host)
+        parts = set(templates.split(","))
+        assert "cves" not in parts
+        assert "vulnerabilities" not in parts
+
+    def test_build_templates_case_insensitive(self, registry):
+        """Tech matching is case-insensitive."""
+        agent = VulnScanAgent(registry)
+        host = {"url": "https://test.com", "tech": ["NGINX/1.25.3"]}
+        templates = agent._build_templates_for_host(host)
+        parts = set(templates.split(","))
+        assert "vulnerabilities" in parts
+        assert "cves" in parts
+
+    @pytest.mark.asyncio
+    async def test_vuln_scanner_security_headers_missing_hsts(self, registry):
+        """Security header scan reports missing HSTS."""
+        import httpx as httpx_client
+        from unittest.mock import AsyncMock as AM
+
+        agent = VulnScanAgent(registry)
+        findings: list[BountyFinding] = []
+        errors: list[str] = []
+
+        # Mock httpx client response with no security headers
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.headers = {"content-type": "text/html"}
+
+        mock_client = MagicMock()
+        mock_client.get = AM(return_value=mock_resp)
+        mock_client.__aenter__ = AM(return_value=mock_client)
+        mock_client.__aexit__ = AM(return_value=None)
+
+        with patch("src.bounty.agents.vuln_scanner.httpx_client.AsyncClient",
+                    return_value=mock_client):
+            await agent._security_header_scan(
+                [{"url": "https://test.com", "priority": 5}],
+                findings, errors,
+            )
+
+        assert len(findings) == 1
+        assert findings[0].vuln_type == "missing_security_headers"
+        assert "strict-transport-security" in findings[0].description.lower()
+
+    @pytest.mark.asyncio
+    async def test_vuln_scanner_security_headers_present(self, registry):
+        """No finding when HSTS header is present."""
+        agent = VulnScanAgent(registry)
+        findings: list[BountyFinding] = []
+        errors: list[str] = []
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.headers = {
+            "content-type": "text/html",
+            "strict-transport-security": "max-age=31536000",
+            "x-frame-options": "DENY",
+        }
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(return_value=mock_resp)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("src.bounty.agents.vuln_scanner.httpx_client.AsyncClient",
+                    return_value=mock_client):
+            await agent._security_header_scan(
+                [{"url": "https://test.com", "priority": 5}],
+                findings, errors,
+            )
+
+        assert len(findings) == 0
+
+    @pytest.mark.asyncio
+    async def test_vuln_scanner_security_headers_http_skipped(self, registry):
+        """HTTP hosts (not HTTPS) are skipped for header scan."""
+        agent = VulnScanAgent(registry)
+        findings: list[BountyFinding] = []
+        errors: list[str] = []
+
+        # Should not even make HTTP request for non-HTTPS
+        await agent._security_header_scan(
+            [{"url": "http://test.com", "priority": 5}],
+            findings, errors,
+        )
+
+        assert len(findings) == 0
+
+    @pytest.mark.asyncio
+    async def test_nuclei_scan_uses_tech_templates(self, registry):
+        """Nuclei scan passes tech-aware templates to nuclei_scan tool."""
+        captured_templates = []
+
+        async def _mock_exec(name, **kw):
+            if name == "nuclei_scan":
+                captured_templates.append(kw.get("templates", ""))
+                return _tool_result(data={"count": 0, "findings": []})
+            return _tool_result(data={})
+
+        registry.execute = AsyncMock(side_effect=_mock_exec)
+        agent = VulnScanAgent(registry)
+        agent._ffuf_scan = AsyncMock()
+        agent._cors_scan = AsyncMock()
+        agent._api_misconfig_scan = AsyncMock()
+        agent._security_header_scan = AsyncMock()
+        agent._security_header_scan = AsyncMock()
+        agent._check_takeover = AsyncMock()
+        agent._open_redirect_scan = AsyncMock()
+
+        await agent.run({
+            "alive_hosts": [
+                {"url": "https://test.com", "tech": ["Apache", "PHP"], "priority": 5},
+            ],
+            "endpoints": [],
+            "subdomains": [],
+        })
+
+        assert len(captured_templates) == 1
+        parts = set(captured_templates[0].split(","))
+        assert "cves" in parts
+        assert "vulnerabilities" in parts
+        assert "exposed-panels" in parts
 
 
 # ===========================================================================
