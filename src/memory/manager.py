@@ -59,6 +59,15 @@ class MemoryManager:
         self.episodic = EpisodicMemory()
         self.summarizer = ConversationSummarizer()
         self.knowledge_graph = KnowledgeGraph()
+        self._trading_memory = None  # Set by JarvisApp
+
+    @property
+    def trading_memory(self):
+        return self._trading_memory
+
+    @trading_memory.setter
+    def trading_memory(self, value):
+        self._trading_memory = value
 
     def session_key(self, channel: str, user_id: str) -> str:
         """Generate consistent session key for episodic memory."""
@@ -182,6 +191,15 @@ class MemoryManager:
         kg_context = self.knowledge_graph.build_context(query)
         if kg_context:
             parts.append("## Knowledge Graph:\n" + kg_context)
+
+        # 5. Trading memory context (persistent trading awareness)
+        if self._is_trading_query(query) and self._trading_memory:
+            try:
+                trading_ctx = self._trading_memory.build_context(query)
+                if trading_ctx:
+                    parts.append(trading_ctx)
+            except Exception as exc:
+                log.warning("trading_memory_context_failed", error=str(exc))
 
         if not parts:
             return ""

@@ -83,6 +83,7 @@ class JarvisApp:
         self._mcp_bridge = None
         self.bounty_pipeline = None
         self.hunter_pipeline = None
+        self.trading_brain = None
 
         log.info("jarvis_app_init_done")
 
@@ -153,6 +154,37 @@ class JarvisApp:
             llm_fn=_llm_call,
         )
 
+    def init_trading_brain(self) -> None:
+        """Initialize Trading Brain — autonomous trading agent."""
+        from src.trading.trading_brain import TradingBrain
+        from src.trading.risk_guard import RiskGuard
+        from src.trading.mt5_client import MT5Client
+        from src.trading.trading_memory import TradingMemory
+
+        client = MT5Client()
+        risk_guard = RiskGuard()
+        trading_memory = TradingMemory()
+
+        # Restore risk state from DB (survives restarts)
+        try:
+            from src.trading.persistence import TradingPersistence
+            persistence = TradingPersistence()
+            risk_guard.load_state(persistence)
+            log.info("risk_state_restored")
+        except Exception as exc:
+            log.warning("risk_state_restore_failed", error=str(exc))
+
+        self.trading_brain = TradingBrain(
+            client, risk_guard, trading_memory=trading_memory,
+        )
+
+        # Bridge TradingMemory into MemoryManager for LLM context injection
+        self.memory.trading_memory = trading_memory
+
+        # Wire the brain instance into tool handlers
+        from src.tools.trading_advanced import set_trading_brain
+        set_trading_brain(self.trading_brain)
+
     async def connect_mcp(self) -> int:
         """Connect MCP servers and register their tools. Returns tool count."""
         try:
@@ -169,6 +201,8 @@ class JarvisApp:
     async def shutdown(self) -> None:
         """Graceful shutdown of all subsystems."""
         log.info("jarvis_app_shutdown")
+        if self.trading_brain:
+            await self.trading_brain.stop()
         if self.bounty_pipeline and self.bounty_pipeline.is_running:
             await self.bounty_pipeline.stop()
         if self.dreamtime:

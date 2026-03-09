@@ -765,6 +765,14 @@ async def trade_status() -> ToolResult:
             pass
         mt5_count = len(mt5_positions)
 
+        # Get managed position tickets for source tagging
+        managed_tickets = set()
+        try:
+            managed = brain.persistence.load_open_positions()
+            managed_tickets = {p["ticket"] for p in managed}
+        except Exception:
+            pass
+
         elapsed = int((time.monotonic() - start) * 1000)
 
         lines = [
@@ -778,11 +786,13 @@ async def trade_status() -> ToolResult:
             f"  Trades Taken: {status['trades_taken']}",
         ]
 
-        # Show live MT5 position details
+        # Show live MT5 position details with source tagging
         for pos in mt5_positions:
             side = "BUY" if pos.get("type") == 0 else "SELL"
+            ticket = pos.get("ticket", 0)
+            tag = "JARVIS" if ticket in managed_tickets else "MANUAL"
             lines.append(
-                f"  Position: {side} {pos.get('volume', 0)} {pos.get('symbol', '')} "
+                f"  [{tag}] {side} {pos.get('volume', 0)} {pos.get('symbol', '')} "
                 f"@ {pos.get('price_open', 0)} | P/L: {pos.get('profit', 0):+.2f}"
             )
 
@@ -792,6 +802,24 @@ async def trade_status() -> ToolResult:
             lines.append(f"  Daily P/L: {state.get('daily_pnl', 0):+.2f}")
             lines.append(f"  Daily Trades: {state.get('daily_trades', 0)}")
             lines.append(f"  Consecutive Losses: {state.get('consecutive_losses', 0)}")
+
+        # Today's P&L from TradingMemory
+        if hasattr(brain, 'trading_memory') and brain.trading_memory:
+            pnl_data = brain.trading_memory.get_today_pnl()
+            if pnl_data["trades"] > 0:
+                lines.append(
+                    f"\n  Today P&L: ${pnl_data['total_pnl']:+.2f} "
+                    f"({pnl_data['trades']} trades, {pnl_data['win_rate']}% WR)"
+                )
+
+        # Recent events
+        if hasattr(brain, 'trading_memory') and brain.trading_memory:
+            recent = brain.trading_memory.get_recent_events(hours=4, limit=5)
+            if recent:
+                lines.append("\n  Recent Events:")
+                for e in recent:
+                    ts = e["created_at"][11:16]  # HH:MM
+                    lines.append(f"    {ts} {e['event_type']}: {e['summary'][:80]}")
 
         status["mt5_positions"] = mt5_count
         return ToolResult(
@@ -1067,4 +1095,65 @@ trade_pending_tool = ToolDefinition(
     ],
     handler=trade_pending,
     timeout_seconds=15,
+)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Phase 5: Trading History
+# ═══════════════════════════════════════════════════════════════════════
+
+
+async def trade_history(hours: str = "12", event_type: str = "") -> ToolResult:
+    """Query trading event history from TradingMemory."""
+    start = time.monotonic()
+    brain = _get_brain()
+    if brain is None or not hasattr(brain, 'trading_memory') or not brain.trading_memory:
+        return ToolResult(success=False, output="", error="Trading Memory not available")
+
+    try:
+        hours_float = float(hours)
+    except ValueError:
+        hours_float = 12
+
+    event_types = [event_type] if event_type else None
+    events = brain.trading_memory.get_recent_events(
+        hours=hours_float, event_types=event_types, limit=30
+    )
+    elapsed = int((time.monotonic() - start) * 1000)
+
+    if not events:
+        return ToolResult(
+            success=True, output=f"No trading events in last {hours_float}h",
+            execution_time_ms=elapsed,
+        )
+
+    lines = [f"Trading Events (last {hours_float}h): {len(events)} events"]
+    for e in reversed(events):  # chronological
+        ts = e["created_at"][:16]
+        lines.append(f"  [{ts}] {e['event_type'].upper()}: {e['summary']}")
+
+    return ToolResult(
+        success=True, output="\n".join(lines),
+        data={"events": events, "count": len(events)},
+        execution_time_ms=elapsed,
+    )
+
+
+trade_history_tool = ToolDefinition(
+    name="trade_history",
+    description="Xem lịch sử trading events: phân tích, quyết định, vào lệnh, đóng lệnh, P&L. Dùng để xem lại những gì đã xảy ra.",
+    parameters=[
+        ToolParameter(
+            name="hours", type="string",
+            description="Số giờ lịch sử (mặc định 12)",
+            required=False, default="12",
+        ),
+        ToolParameter(
+            name="event_type", type="string",
+            description="Lọc event type: plan, zone_alert, entry_decision, approval, position_open, position_close, daily_summary",
+            required=False, default="",
+        ),
+    ],
+    handler=trade_history,
+    timeout_seconds=10,
 )

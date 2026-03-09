@@ -605,6 +605,12 @@ class AgentLoop:
                     return None
         return None
 
+    # Trading tools need more output space for full analysis
+    _LARGE_OUTPUT_TOOLS = frozenset({
+        "mt5_analyze", "mt5_smc", "trade_status", "trade_history",
+        "mt5_journal_stats", "trade_plan",
+    })
+
     # Tools that must NEVER be cached — they return real-time data
     _NOCACHE_TOOLS = frozenset({
         "mt5_get_price", "mt5_get_tick", "mt5_get_positions", "mt5_get_orders",
@@ -612,7 +618,7 @@ class AgentLoop:
         "mt5_get_candles", "mt5_account_info", "mt5_place_pending",
         "mt5_modify_order", "mt5_cancel_order", "mt5_get_pending_orders",
         "trade_plan", "trade_status", "trade_control", "trade_pending",
-        "trade_config", "web_search", "deep_search", "browse_web",
+        "trade_config", "trade_history", "web_search", "deep_search", "browse_web",
     })
 
     async def _execute_tool_cached(self, name: str, args: dict) -> ToolResult:
@@ -680,10 +686,11 @@ class AgentLoop:
 
             # Format result for LLM (truncate to prevent overflow)
             result_content = result.output if result.success else f"Error: {result.error}"
-            if len(result_content) > self._MAX_TOOL_OUTPUT:
+            max_output = 8000 if tool_name in self._LARGE_OUTPUT_TOOLS else self._MAX_TOOL_OUTPUT
+            if len(result_content) > max_output:
                 truncated_len = len(result_content)
                 result_content = (
-                    result_content[:self._MAX_TOOL_OUTPUT]
+                    result_content[:max_output]
                     + f"\n\n...[truncated: {truncated_len} chars total]"
                 )
 

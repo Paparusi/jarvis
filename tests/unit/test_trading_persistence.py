@@ -266,6 +266,29 @@ class TestTradeApprovals:
         assert result is None
 
 
+class TestRiskState:
+    def test_save_and_load(self, store):
+        store.save_risk_state({
+            "daily_pnl": -25.5,
+            "weekly_pnl": 100.0,
+            "consecutive_losses": 2,
+        })
+        state = store.load_risk_state()
+        assert state["daily_pnl"] == -25.5
+        assert state["weekly_pnl"] == 100.0
+        assert state["consecutive_losses"] == 2
+
+    def test_empty_state(self, store):
+        state = store.load_risk_state()
+        assert state == {}
+
+    def test_overwrite(self, store):
+        store.save_risk_state({"daily_pnl": 10.0})
+        store.save_risk_state({"daily_pnl": 20.0})
+        state = store.load_risk_state()
+        assert state["daily_pnl"] == 20.0
+
+
 class TestTableInit:
     def test_tables_created(self, store, _temp_db):
         """Tables are created on first access."""

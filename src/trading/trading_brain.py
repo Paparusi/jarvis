@@ -42,6 +42,7 @@ class TradingBrain:
         risk_guard: Any = None,
         journal: Any = None,
         symbol: str = "",
+        trading_memory: Any = None,
     ) -> None:
         """Create all sub-modules and wire callbacks.
 
@@ -85,6 +86,7 @@ class TradingBrain:
         self._scheduler_task: asyncio.Task | None = None
         self._last_plan_hour: int = -1
         self._plan_id: int | None = None  # DB row id
+        self.trading_memory = trading_memory
 
     # ------------------------------------------------------------------
     # Public API
@@ -156,6 +158,16 @@ class TradingBrain:
             self._plan_id = self.persistence.save_plan(plan)
         except Exception as exc:
             log.warning("plan_save_failed", error=str(exc))
+
+        if self.trading_memory:
+            self.trading_memory.log_event(
+                event_type="plan",
+                summary=f"{session} plan: {plan.bias} bias, {len(plan.alert_zones)} zones, regime: {plan.market_regime}",
+                details={"bias": plan.bias, "reasoning": plan.bias_reasoning[:300],
+                         "regime": plan.market_regime, "zone_count": len(plan.alert_zones),
+                         "max_trades": plan.max_trades},
+                session=session, plan_id=self._plan_id, source="brain",
+            )
 
         # Cancel old pending orders
         await self.pending_manager.cancel_all()
@@ -292,6 +304,13 @@ class TradingBrain:
                 for order_info in filled:
                     await self._on_pending_filled(order_info)
 
+                # Save risk state periodically
+                if self._risk_guard and hasattr(self._risk_guard, 'save_state'):
+                    try:
+                        self._risk_guard.save_state(self.persistence)
+                    except Exception:
+                        pass
+
                 await asyncio.sleep(60)
 
             except asyncio.CancelledError:
@@ -321,6 +340,14 @@ class TradingBrain:
         """
         zone_id = zone.get("zone_id", "unknown")
         await self._notify(f"Price {price} entered zone {zone_id}")
+
+        if self.trading_memory:
+            self.trading_memory.log_event(
+                event_type="zone_alert",
+                summary=f"Price {price} entered zone {zone_id}",
+                details={"zone_id": zone_id, "zone": zone},
+                price_at_event=price, plan_id=self._plan_id,
+            )
 
         # Get current open positions
         try:
@@ -353,16 +380,41 @@ class TradingBrain:
                 msg = self._format_approval_alert(approval)
                 await self._notify(msg)
 
+            if self.trading_memory:
+                self.trading_memory.log_event(
+                    event_type="entry_decision",
+                    summary=f"ENTER {zone_id}: {decision.reasoning[:100]}",
+                    details={"action": "ENTER", "direction": decision.direction,
+                             "reasoning": decision.reasoning, "zone_id": zone_id},
+                    price_at_event=price, plan_id=self._plan_id,
+                )
+
         elif decision.action == "SKIP":
             skip_msg = f"SKIP zone {zone_id}: {decision.reasoning}"
             await self._notify(skip_msg)
             self.monitor.remove_zone(zone_id)
             log.info("zone_skipped", zone_id=zone_id, reason=decision.reasoning)
 
+            if self.trading_memory:
+                self.trading_memory.log_event(
+                    event_type="entry_decision",
+                    summary=f"SKIP {zone_id}: {decision.reasoning[:100]}",
+                    details={"action": "SKIP", "reasoning": decision.reasoning, "zone_id": zone_id},
+                    price_at_event=price, plan_id=self._plan_id,
+                )
+
         elif decision.action == "WAIT":
             wait_msg = f"WAIT zone {zone_id}: {decision.reasoning}"
             await self._notify(wait_msg)
             log.info("zone_wait", zone_id=zone_id, reason=decision.reasoning)
+
+            if self.trading_memory:
+                self.trading_memory.log_event(
+                    event_type="entry_decision",
+                    summary=f"WAIT {zone_id}: {decision.reasoning[:100]}",
+                    details={"action": "WAIT", "reasoning": decision.reasoning, "zone_id": zone_id},
+                    price_at_event=price, plan_id=self._plan_id,
+                )
 
     async def _on_zone_invalidate(self, zone: dict, reason: str) -> None:
         """Zone invalidation callback. Cancel pending order + approval + notify."""
@@ -423,6 +475,15 @@ class TradingBrain:
         )
         await self._notify(msg)
         log.info("pending_filled_managed", ticket=ticket, zone_id=zone_id)
+
+        if self.trading_memory:
+            self.trading_memory.log_event(
+                event_type="position_open",
+                summary=f"OPEN {direction.upper()} {self._symbol} @ {price} (#{ticket})",
+                details={"direction": direction, "volume": volume, "entry_price": price,
+                         "sl": sl, "tp1": tp1, "tp2": tp2, "zone_id": zone_id},
+                price_at_event=price, plan_id=self._plan_id, ticket=ticket,
+            )
 
     # ------------------------------------------------------------------
     # State recovery
@@ -581,6 +642,16 @@ class TradingBrain:
 
         summary = "\n".join(lines)
         log.info("daily_summary_generated", trades=daily_trades, pnl=daily_pnl)
+
+        if self.trading_memory:
+            self.trading_memory.log_event(
+                event_type="daily_summary",
+                summary=f"Daily: {daily_trades} trades, P/L: {daily_pnl:+.2f}, WR: ~{win_rate:.0f}%",
+                details={"trades": daily_trades, "pnl": daily_pnl, "win_rate": win_rate,
+                         "consecutive_losses": consecutive_losses},
+                session=session, source="system",
+            )
+
         return summary
 
     # ------------------------------------------------------------------
@@ -620,9 +691,28 @@ class TradingBrain:
                                 )
                             except Exception:
                                 pass
+            if self.trading_memory:
+                self.trading_memory.log_event(
+                    event_type="approval",
+                    summary=f"Trade APPROVED ({approval_id}) via {via}",
+                    details={"approval_id": approval_id, "action": action, "via": via,
+                             "ticket": result.get("ticket")},
+                    ticket=result.get("ticket"),
+                    source="user",
+                )
             return result
         elif action == "reject":
-            return await self.approval_manager.reject(approval_id, via=via)
+            result = await self.approval_manager.reject(approval_id, via=via)
+            if self.trading_memory:
+                self.trading_memory.log_event(
+                    event_type="approval",
+                    summary=f"Trade REJECTED ({approval_id}) via {via}",
+                    details={"approval_id": approval_id, "action": action, "via": via,
+                             "ticket": result.get("ticket")},
+                    ticket=result.get("ticket"),
+                    source="user",
+                )
+            return result
         return {"error": f"Unknown action: {action}"}
 
     def _format_approval_alert(self, approval: dict) -> str:

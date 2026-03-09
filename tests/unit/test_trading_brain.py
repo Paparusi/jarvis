@@ -158,7 +158,7 @@ class TestLifecycle:
     async def test_start_stop(self):
         """Verify start creates scheduler task, stop cancels it."""
         mt5 = _make_mock_mt5()
-        brain = TradingBrain(mt5)
+        brain = TradingBrain(mt5, trading_memory=MagicMock())
 
         await brain.start()
 
@@ -175,7 +175,7 @@ class TestLifecycle:
     async def test_start_idempotent(self):
         """Calling start twice doesn't create duplicate tasks."""
         mt5 = _make_mock_mt5()
-        brain = TradingBrain(mt5)
+        brain = TradingBrain(mt5, trading_memory=MagicMock())
 
         await brain.start()
         first_task = brain._scheduler_task
@@ -193,7 +193,7 @@ class TestLifecycle:
     async def test_kill_closes_positions_and_stops(self):
         """Kill should emergency_close_all + cancel pending + stop monitor."""
         mt5 = _make_mock_mt5()
-        brain = TradingBrain(mt5)
+        brain = TradingBrain(mt5, trading_memory=MagicMock())
 
         # Mock sub-modules
         brain.position_manager = AsyncMock()
@@ -227,7 +227,7 @@ class TestAlertFlow:
         """Zone alert -> confirm ENTER -> create approval (not direct order)."""
         mt5 = _make_mock_mt5()
         rg = _make_mock_risk_guard()
-        brain = TradingBrain(mt5, risk_guard=rg)
+        brain = TradingBrain(mt5, risk_guard=rg, trading_memory=MagicMock())
 
         # Set a current plan
         brain.current_plan = _make_plan()
@@ -289,7 +289,7 @@ class TestAlertFlow:
     async def test_alert_skip_flow(self):
         """Zone alert -> confirm SKIP -> remove zone."""
         mt5 = _make_mock_mt5()
-        brain = TradingBrain(mt5)
+        brain = TradingBrain(mt5, trading_memory=MagicMock())
 
         brain.confirmer = AsyncMock()
         brain.confirmer.confirm = AsyncMock(return_value=_make_skip_decision())
@@ -318,7 +318,7 @@ class TestAlertFlow:
     async def test_alert_wait_flow(self):
         """Zone alert -> confirm WAIT -> zone stays active."""
         mt5 = _make_mock_mt5()
-        brain = TradingBrain(mt5)
+        brain = TradingBrain(mt5, trading_memory=MagicMock())
 
         brain.confirmer = AsyncMock()
         brain.confirmer.confirm = AsyncMock(return_value=_make_wait_decision())
@@ -357,7 +357,7 @@ class TestApprovalResponse:
         """Approve -> places order -> creates ManagedPosition."""
         mt5 = _make_mock_mt5()
         rg = _make_mock_risk_guard()
-        brain = TradingBrain(mt5, risk_guard=rg)
+        brain = TradingBrain(mt5, risk_guard=rg, trading_memory=MagicMock())
         brain.current_plan = _make_plan(trades_taken=0)
         brain._plan_id = 1
 
@@ -400,7 +400,7 @@ class TestApprovalResponse:
     async def test_reject(self):
         """Reject -> calls approval_manager.reject."""
         mt5 = _make_mock_mt5()
-        brain = TradingBrain(mt5)
+        brain = TradingBrain(mt5, trading_memory=MagicMock())
 
         brain.approval_manager = AsyncMock()
         brain.approval_manager.reject = AsyncMock(return_value={"status": "rejected"})
@@ -414,7 +414,7 @@ class TestApprovalResponse:
     async def test_unknown_action(self):
         """Unknown action -> error."""
         mt5 = _make_mock_mt5()
-        brain = TradingBrain(mt5)
+        brain = TradingBrain(mt5, trading_memory=MagicMock())
 
         result = await brain.handle_approval_response("apr_test", "invalid")
         assert "error" in result
@@ -432,7 +432,7 @@ class TestScheduler:
     async def test_london_plan(self):
         """At 07:00 UTC should create London plan."""
         mt5 = _make_mock_mt5()
-        brain = TradingBrain(mt5)
+        brain = TradingBrain(mt5, trading_memory=MagicMock())
         brain._running = True
 
         # Mock plan_now to track calls
@@ -466,7 +466,7 @@ class TestScheduler:
     async def test_ny_plan(self):
         """At 12:30 UTC should create NY plan."""
         mt5 = _make_mock_mt5()
-        brain = TradingBrain(mt5)
+        brain = TradingBrain(mt5, trading_memory=MagicMock())
         brain._running = True
 
         brain.plan_now = AsyncMock(return_value="NY plan")
@@ -497,7 +497,7 @@ class TestScheduler:
         """At 16:00 UTC should stop monitor and generate summary."""
         mt5 = _make_mock_mt5()
         rg = _make_mock_risk_guard()
-        brain = TradingBrain(mt5, risk_guard=rg)
+        brain = TradingBrain(mt5, risk_guard=rg, trading_memory=MagicMock())
         brain._running = True
         brain.current_plan = _make_plan(trades_taken=2)
 
@@ -533,7 +533,7 @@ class TestScheduler:
     async def test_no_duplicate_plan_same_hour(self):
         """Should not re-plan in the same hour."""
         mt5 = _make_mock_mt5()
-        brain = TradingBrain(mt5)
+        brain = TradingBrain(mt5, trading_memory=MagicMock())
         brain._running = True
         brain._last_plan_hour = 7  # Already planned for hour 7
 
@@ -568,7 +568,7 @@ class TestStatus:
     def test_get_status_no_plan(self):
         """Status without active plan shows defaults."""
         mt5 = _make_mock_mt5()
-        brain = TradingBrain(mt5)
+        brain = TradingBrain(mt5, trading_memory=MagicMock())
 
         status = brain.get_status()
 
@@ -583,7 +583,7 @@ class TestStatus:
         """Status with active plan shows plan summary."""
         mt5 = _make_mock_mt5()
         rg = _make_mock_risk_guard()
-        brain = TradingBrain(mt5, risk_guard=rg)
+        brain = TradingBrain(mt5, risk_guard=rg, trading_memory=MagicMock())
         brain._running = True
         brain.current_plan = _make_plan(
             session="London", bias="bullish", trades_taken=1
@@ -618,7 +618,7 @@ class TestDailySummary:
                 "consecutive_losses": 0,
             },
         }
-        brain = TradingBrain(mt5, risk_guard=rg)
+        brain = TradingBrain(mt5, risk_guard=rg, trading_memory=MagicMock())
         brain.current_plan = _make_plan(
             session="London", trades_taken=2, max_trades=3
         )
@@ -644,7 +644,7 @@ class TestRecovery:
     async def test_recover_plan(self):
         """Recovery loads plan from persistence."""
         mt5 = _make_mock_mt5()
-        brain = TradingBrain(mt5)
+        brain = TradingBrain(mt5, trading_memory=MagicMock())
 
         # Mock persistence to return a saved plan
         brain.persistence = MagicMock()
@@ -694,7 +694,7 @@ class TestRecovery:
             {"ticket": 12345, "symbol": "XAUUSD", "type": 1, "volume": 0.03,
              "price_open": 2665.0, "sl": 2680.0, "tp": 2640.0, "profit": 15.0}
         ]
-        brain = TradingBrain(mt5)
+        brain = TradingBrain(mt5, trading_memory=MagicMock())
 
         brain.persistence = MagicMock()
         brain.persistence.get_recovery_state.return_value = {
@@ -743,7 +743,7 @@ class TestRecovery:
         """Position in DB but not in MT5 -> marked as closed_offline."""
         mt5 = _make_mock_mt5()
         mt5.get_positions.return_value = []  # Position not in MT5 anymore
-        brain = TradingBrain(mt5)
+        brain = TradingBrain(mt5, trading_memory=MagicMock())
 
         brain.persistence = MagicMock()
         brain.persistence.get_recovery_state.return_value = {
@@ -780,7 +780,7 @@ class TestRecovery:
     async def test_empty_recovery(self):
         """Empty recovery state -> no errors."""
         mt5 = _make_mock_mt5()
-        brain = TradingBrain(mt5)
+        brain = TradingBrain(mt5, trading_memory=MagicMock())
 
         brain.persistence = MagicMock()
         brain.persistence.get_recovery_state.return_value = {
@@ -809,7 +809,7 @@ class TestPendingFilled:
     async def test_on_pending_filled(self):
         """Filled pending order -> create ManagedPosition + notify."""
         mt5 = _make_mock_mt5()
-        brain = TradingBrain(mt5)
+        brain = TradingBrain(mt5, trading_memory=MagicMock())
         brain.current_plan = _make_plan(trades_taken=0)
         brain._plan_id = 1
 
@@ -851,3 +851,76 @@ class TestPendingFilled:
         # Notification sent
         assert any("FILLED" in n for n in notifications)
         assert any("5001" in n for n in notifications)
+
+
+# ===========================================================================
+# TestTradingMemoryIntegration
+# ===========================================================================
+
+
+class TestTradingMemoryIntegration:
+    """Test trading_memory event logging."""
+
+    @pytest.mark.asyncio
+    async def test_plan_logs_event(self):
+        """plan_now() should log a 'plan' event to trading_memory."""
+        mt5 = _make_mock_mt5()
+        rg = _make_mock_risk_guard()
+        tm = MagicMock()
+        brain = TradingBrain(mt5, risk_guard=rg, trading_memory=tm)
+
+        # Mock planner to return a plan
+        plan = _make_plan(session="London", bias="bullish")
+        brain.planner = MagicMock()
+        brain.planner.create_plan = AsyncMock(return_value=plan)
+        brain.planner.format_plan_telegram = MagicMock(return_value="Plan text")
+
+        # Mock persistence
+        brain.persistence = MagicMock()
+        brain.persistence.save_plan = MagicMock(return_value=1)
+
+        # Mock approval manager
+        brain.approval_manager = MagicMock()
+        brain.approval_manager.cancel_all = AsyncMock(return_value=0)
+
+        # Mock pending manager
+        brain.pending_manager = MagicMock()
+        brain.pending_manager.cancel_all = AsyncMock(return_value=0)
+        brain.pending_manager.place_zone_orders = AsyncMock(return_value=[])
+        brain.pending_manager.order_count = 0
+
+        # Mock monitor
+        brain.monitor = MagicMock()
+        brain.monitor.set_plan = MagicMock()
+        brain.monitor.is_running = True
+
+        await brain.plan_now("London")
+
+        tm.log_event.assert_called()
+        call_args = tm.log_event.call_args
+        assert call_args.kwargs.get("event_type") == "plan" or call_args[1].get("event_type") == "plan"
+
+    @pytest.mark.asyncio
+    async def test_zone_alert_logs_event(self):
+        """_on_zone_alert() should log a 'zone_alert' event to trading_memory."""
+        mt5 = _make_mock_mt5()
+        tm = MagicMock()
+        brain = TradingBrain(mt5, trading_memory=tm)
+
+        brain.confirmer = AsyncMock()
+        brain.confirmer.confirm = AsyncMock(return_value=_make_wait_decision())
+
+        brain.monitor = MagicMock()
+        brain.monitor.remove_zone = MagicMock()
+
+        brain._notify_cb = AsyncMock()
+
+        zone = {"zone_id": "zone_test", "direction": "buy"}
+        await brain._on_zone_alert(zone, 2655.0)
+
+        # Should have logged at least zone_alert + entry_decision
+        assert tm.log_event.call_count >= 2
+        event_types = [c.kwargs.get("event_type") or c[1].get("event_type")
+                       for c in tm.log_event.call_args_list]
+        assert "zone_alert" in event_types
+        assert "entry_decision" in event_types

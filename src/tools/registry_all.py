@@ -79,6 +79,19 @@ from src.tools.discovery import (
     subfinder_enum_tool, httpx_probe_tool, katana_crawl_tool,
     gau_urls_tool, ffuf_fuzz_tool,
 )
+from src.tools.trading import (
+    mt5_price_tool, mt5_candles_tool, mt5_account_tool,
+    mt5_positions_tool, mt5_order_tool, mt5_close_tool,
+    mt5_history_tool, market_session_tool,
+    technical_indicators_tool, trading_calendar_tool,
+)
+from src.tools.trading_advanced import (
+    mt5_analyze_tool, mt5_signal_tool, mt5_risk_tool,
+    mt5_journal_log_tool, mt5_journal_stats_tool, mt5_journal_sync_tool,
+    mt5_smc_tool,
+    trade_plan_tool, trade_status_tool, trade_config_tool, trade_control_tool,
+    trade_pending_tool, trade_history_tool,
+)
 
 from src.tools.base import ToolDefinition
 
@@ -139,4 +152,16 @@ ALL_TOOLS: list[ToolDefinition] = [
     # Discovery (ProjectDiscovery)
     subfinder_enum_tool, httpx_probe_tool, katana_crawl_tool,
     gau_urls_tool, ffuf_fuzz_tool,
+    # Trading (MT5)
+    mt5_price_tool, mt5_candles_tool, mt5_account_tool,
+    mt5_positions_tool, mt5_order_tool, mt5_close_tool,
+    mt5_history_tool, market_session_tool,
+    technical_indicators_tool, trading_calendar_tool,
+    # Trading Advanced (Phase 2) + SMC (Phase 3)
+    mt5_analyze_tool, mt5_signal_tool, mt5_risk_tool,
+    mt5_journal_log_tool, mt5_journal_stats_tool, mt5_journal_sync_tool,
+    mt5_smc_tool,
+    # Trading Brain (Phase 4)
+    trade_plan_tool, trade_status_tool, trade_config_tool, trade_control_tool,
+    trade_pending_tool, trade_history_tool,
 ]

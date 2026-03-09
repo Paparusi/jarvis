@@ -95,6 +95,12 @@ def _init_trading_tables(conn: sqlite3.Connection) -> None:
             reject_reason TEXT,
             order_ticket INTEGER
         );
+
+        CREATE TABLE IF NOT EXISTS risk_state (
+            key TEXT PRIMARY KEY,
+            value REAL NOT NULL,
+            updated_at TEXT NOT NULL
+        );
     """)
 
 
@@ -308,6 +314,25 @@ class TradingPersistence:
             "SELECT * FROM trade_approvals WHERE id = ?", (approval_id,)
         ).fetchone()
         return dict(row) if row else None
+
+    # ── Risk State ──
+
+    def save_risk_state(self, state: dict[str, float]) -> None:
+        """Persist risk state key-value pairs."""
+        conn = _ensure_tables()
+        now = datetime.now(timezone.utc).isoformat()
+        for key, value in state.items():
+            conn.execute(
+                "INSERT OR REPLACE INTO risk_state (key, value, updated_at) VALUES (?, ?, ?)",
+                (key, value, now),
+            )
+        conn.commit()
+
+    def load_risk_state(self) -> dict[str, float]:
+        """Load persisted risk state. Returns empty dict if no data."""
+        conn = _ensure_tables()
+        rows = conn.execute("SELECT key, value FROM risk_state").fetchall()
+        return {row["key"]: row["value"] for row in rows}
 
     # ── Recovery ──
 
