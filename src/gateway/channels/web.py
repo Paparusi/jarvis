@@ -14,7 +14,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -43,6 +44,15 @@ STATIC_DIR = Path(__file__).parent.parent.parent.parent / "web" / "static"
 def create_app(app: JarvisApp | None = None) -> FastAPI:
     """Create and configure the FastAPI application."""
     fastapi_app = FastAPI(title="JARVIS", version="2.0")
+
+    fastapi_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:3000"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
     adapter = WebAdapter(app)
 
     # --- WebSocket chat ---
@@ -109,6 +119,57 @@ def create_app(app: JarvisApp | None = None) -> FastAPI:
     @fastapi_app.get("/api/memory")
     async def api_memory():
         return JSONResponse(adapter.get_memories())
+
+    # --- Trading API ---
+    @fastapi_app.get("/api/trading/status")
+    async def api_trading_status():
+        return JSONResponse(adapter.get_trading_status())
+
+    @fastapi_app.get("/api/trading/positions")
+    async def api_trading_positions():
+        return JSONResponse(await adapter.get_trading_positions())
+
+    @fastapi_app.get("/api/trading/history")
+    async def api_trading_history():
+        return JSONResponse(await adapter.get_trading_history())
+
+    @fastapi_app.get("/api/trading/zones")
+    async def api_trading_zones():
+        return JSONResponse(adapter.get_trading_zones())
+
+    @fastapi_app.get("/api/trading/pnl")
+    async def api_trading_pnl():
+        return JSONResponse(await adapter.get_trading_pnl())
+
+    @fastapi_app.post("/api/trading/control")
+    async def api_trading_control(request: dict):
+        action = request.get("action", "")
+        return JSONResponse(await adapter.trading_control(action))
+
+    # --- Memory, Activity, System API ---
+    @fastapi_app.get("/api/memory/search")
+    async def api_memory_search(q: str = Query("")):
+        return JSONResponse(await adapter.search_memories(q))
+
+    @fastapi_app.post("/api/memory")
+    async def api_memory_add(request: dict):
+        return JSONResponse(await adapter.add_memory(request))
+
+    @fastapi_app.delete("/api/memory/{memory_id}")
+    async def api_memory_delete(memory_id: str):
+        return JSONResponse(adapter.delete_memory(memory_id))
+
+    @fastapi_app.get("/api/activity")
+    async def api_activity():
+        return JSONResponse(adapter.get_activity())
+
+    @fastapi_app.get("/api/system/metrics")
+    async def api_system_metrics():
+        return JSONResponse(adapter.get_system_metrics())
+
+    @fastapi_app.get("/api/dreamtime/status")
+    async def api_dreamtime_status():
+        return JSONResponse(adapter.get_dreamtime_status())
 
     # Mount static files (CSS, JS, etc.)
     if STATIC_DIR.exists():
@@ -270,9 +331,7 @@ class WebAdapter:
             "version": "2.0",
             "skills": len(self._skill_loader.get_all_metadata()),
             "tools": len(self._tool_registry.get_all()),
-            "local_model": router_stats.get("local_model", ""),
             "cloud_model": router_stats.get("cloud_model", ""),
-            "local_enabled": router_stats.get("local_enabled", False),
             "total_calls": cost.get("total_calls", 0),
             "local_ratio": f"{cost.get('local_ratio', 0) * 100:.0f}%",
             "total_cost": f"${cost.get('total_cost_usd', 0):.4f}",
@@ -330,4 +389,140 @@ class WebAdapter:
                 }
                 for m in memories
             ]
+        }
+
+    # --- Trading methods ---
+
+    def get_trading_status(self) -> dict:
+        if not self._app or not getattr(self._app, 'trading_brain', None):
+            return {"status": "unavailable", "running": False}
+        brain = self._app.trading_brain
+        return brain.get_status()
+
+    async def get_trading_positions(self) -> dict:
+        if not self._app or not getattr(self._app, 'trading_brain', None):
+            return {"positions": []}
+        try:
+            from src.trading.mt5_client import MT5Client
+            client = MT5Client()
+            positions = await client.get_positions()
+            return {"positions": positions}
+        except Exception as e:
+            return {"positions": [], "error": str(e)}
+
+    async def get_trading_history(self) -> dict:
+        if not self._app or not getattr(self._app, 'trading_brain', None):
+            return {"trades": []}
+        try:
+            from src.trading.persistence import TradingPersistence
+            db = TradingPersistence()
+            trades = db.get_recent_trades(limit=50)
+            return {"trades": trades}
+        except Exception as e:
+            return {"trades": [], "error": str(e)}
+
+    def get_trading_zones(self) -> dict:
+        if not self._app or not getattr(self._app, 'trading_brain', None):
+            return {"zones": []}
+        status = self._app.trading_brain.get_status()
+        return {"zones": status.get("active_zones", [])}
+
+    async def get_trading_pnl(self) -> dict:
+        if not self._app or not getattr(self._app, 'trading_brain', None):
+            return {"daily": 0, "weekly": 0, "monthly": 0}
+        try:
+            brain = self._app.trading_brain
+            status = brain.get_status()
+            rg = status.get("risk_guard", {})
+            return {
+                "daily_pnl": rg.get("daily_pnl", 0),
+                "daily_pnl_pct": rg.get("daily_pnl_pct", 0),
+                "weekly_pnl": rg.get("weekly_pnl", 0),
+                "weekly_pnl_pct": rg.get("weekly_pnl_pct", 0),
+                "daily_trades": rg.get("daily_trades", 0),
+                "consecutive_losses": rg.get("consecutive_losses", 0),
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def trading_control(self, action: str) -> dict:
+        if not self._app or not getattr(self._app, 'trading_brain', None):
+            return {"error": "Trading brain not available"}
+        brain = self._app.trading_brain
+        if action == "start":
+            await brain.start()
+            return {"status": "started"}
+        elif action == "stop":
+            await brain.stop()
+            return {"status": "stopped"}
+        elif action == "plan":
+            result = await brain.plan_now()
+            return {"status": "planned", "result": result}
+        return {"error": f"Unknown action: {action}"}
+
+    # --- Memory, Activity, System methods ---
+
+    async def search_memories(self, query: str) -> dict:
+        if not query:
+            return self.get_memories()
+        try:
+            results = await self._memory.semantic.search(query, limit=20)
+            return {
+                "memories": [
+                    {
+                        "content": r["content"],
+                        "category": r.get("category", ""),
+                        "importance": r.get("importance", 0),
+                        "score": r.get("score", 0),
+                    }
+                    for r in results
+                ]
+            }
+        except Exception as e:
+            return {"memories": [], "error": str(e)}
+
+    async def add_memory(self, data: dict) -> dict:
+        content = data.get("content", "")
+        category = data.get("category", "user_stated")
+        if not content:
+            return {"error": "Content required"}
+        await self._memory.remember_fact(content, category=category)
+        return {"status": "saved"}
+
+    def delete_memory(self, memory_id: str) -> dict:
+        try:
+            self._memory.semantic.delete(memory_id)
+            return {"status": "deleted"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def get_activity(self) -> dict:
+        try:
+            stats = self._collector.get_stats()
+            return {
+                "total_records": stats.get("total_records", 0),
+                "recent": stats.get("recent_records", [])[:10],
+            }
+        except Exception:
+            return {"total_records": 0, "recent": []}
+
+    def get_system_metrics(self) -> dict:
+        import psutil
+        return {
+            "cpu_percent": psutil.cpu_percent(),
+            "ram_percent": psutil.virtual_memory().percent,
+            "ram_used_gb": round(psutil.virtual_memory().used / 1e9, 1),
+            "ram_total_gb": round(psutil.virtual_memory().total / 1e9, 1),
+            "disk_percent": psutil.disk_usage("/").percent,
+            "disk_used_gb": round(psutil.disk_usage("/").used / 1e9, 1),
+        }
+
+    def get_dreamtime_status(self) -> dict:
+        if not self._app or not getattr(self._app, 'dreamtime', None):
+            return {"status": "unavailable"}
+        dt = self._app.dreamtime
+        return {
+            "enabled": dt._enabled if hasattr(dt, '_enabled') else False,
+            "last_run": str(dt._last_run) if hasattr(dt, '_last_run') else None,
+            "idle_minutes": dt._idle_minutes if hasattr(dt, '_idle_minutes') else 30,
         }
