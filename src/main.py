@@ -41,6 +41,7 @@ async def run_telegram() -> None:
     app.init_swarm()
     app.init_proactive()
     app.init_bounty()
+    app.init_trading_brain()
 
     # Connect MCP servers (async)
     await app.connect_mcp()
@@ -58,6 +59,20 @@ async def run_telegram() -> None:
     except Exception as e:
         log.warning("metrics_server_failed", error=str(e))
 
+    # Start web dashboard API server
+    web_server = None
+    try:
+        import uvicorn
+        from src.gateway.channels.web import create_app
+
+        web_app = create_app(app)
+        web_config = uvicorn.Config(web_app, host="0.0.0.0", port=8000, log_level="warning")
+        web_server = uvicorn.Server(web_config)
+        asyncio.create_task(web_server.serve())
+        log.info("web_server_started", port=8000)
+    except Exception as e:
+        log.warning("web_server_failed", error=str(e))
+
     # Create adapter with shared container
     from src.gateway.channels.telegram import TelegramAdapter
 
@@ -66,6 +81,8 @@ async def run_telegram() -> None:
 
     log.info("jarvis_ready", channel="telegram")
     print("\n🤖 JARVIS is running! Chat with me on Telegram.")
+    print("   Dashboard: http://localhost:3000")
+    print("   API: http://localhost:8000")
     print("   Metrics: http://localhost:9090/metrics")
     print("   Press Ctrl+C to stop.\n")
 
@@ -82,6 +99,8 @@ async def run_telegram() -> None:
     await stop_event.wait()
 
     log.info("jarvis_shutting_down")
+    if web_server:
+        web_server.should_exit = True
     if metrics_server:
         await metrics_server.stop()
     await adapter.stop()
@@ -104,6 +123,7 @@ async def run_cli() -> None:
     app = JarvisApp()
     app.init_dreamtime()
     app.init_bounty()
+    app.init_trading_brain()
 
     from src.gateway.channels.cli import CLIAdapter
 
