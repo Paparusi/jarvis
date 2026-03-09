@@ -1,16 +1,35 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import useSWR from "swr";
 import { fetcher } from "@/lib/api";
 import { Play, Square, RefreshCw } from "lucide-react";
 import TradingChart from "@/components/TradingChart";
 import PositionsTable from "@/components/PositionsTable";
+import ApprovalCard from "@/components/ApprovalCard";
+import { useWebSocket } from "@/hooks/useWebSocket";
 
 export default function TradingPage() {
   const { data: status } = useSWR("/api/trading/status", fetcher, { refreshInterval: 5000 });
   const { data: positions } = useSWR("/api/trading/positions", fetcher, { refreshInterval: 5000 });
   const { data: pnl } = useSWR("/api/trading/pnl", fetcher, { refreshInterval: 10000 });
   const { data: zones } = useSWR("/api/trading/zones", fetcher, { refreshInterval: 30000 });
+  const { data: approvals, mutate: refreshApprovals } = useSWR("/api/trading/approvals", fetcher, { refreshInterval: 5000 });
+  const { data: candleData } = useSWR("/api/trading/candles?symbol=XAUUSD&timeframe=H1&count=200", fetcher, { refreshInterval: 60000 });
+
+  const { messages } = useWebSocket("/ws/trading");
+  const [liveBid, setLiveBid] = useState<number | null>(null);
+
+  // Handle WebSocket events
+  useEffect(() => {
+    if (messages.length === 0) return;
+    const last = messages[messages.length - 1];
+    if (last.type === "tick") {
+      setLiveBid(last.bid);
+    } else if (last.type === "approval" || last.type === "approval_update") {
+      refreshApprovals();
+    }
+  }, [messages, refreshApprovals]);
 
   const handleControl = async (action: string) => {
     await fetch("/api/trading/control", {
@@ -20,12 +39,37 @@ export default function TradingPage() {
     });
   };
 
+  const handleApprove = async (id: string) => {
+    await fetch(`/api/trading/approve/${id}`, { method: "POST" });
+    refreshApprovals();
+  };
+
+  const handleReject = async (id: string) => {
+    await fetch(`/api/trading/reject/${id}`, { method: "POST" });
+    refreshApprovals();
+  };
+
   const running = status?.running ?? false;
+  const pendingApprovals = approvals?.approvals ?? [];
+
+  // Transform candle data for chart
+  const chartData = (candleData?.candles ?? []).map((c: any) => ({
+    time: c.time,
+    open: c.open,
+    high: c.high,
+    low: c.low,
+    close: c.close,
+  }));
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Trading</h1>
+        <div className="flex items-center gap-4">
+          <h1 className="text-2xl font-bold">Trading</h1>
+          {liveBid && (
+            <span className="text-lg font-mono text-yellow-400">{liveBid.toFixed(2)}</span>
+          )}
+        </div>
         <div className="flex gap-2">
           {!running ? (
             <button onClick={() => handleControl("start")}
@@ -44,6 +88,18 @@ export default function TradingPage() {
           </button>
         </div>
       </div>
+
+      {/* Pending Approvals */}
+      {pendingApprovals.length > 0 && (
+        <div className="space-y-3">
+          <h2 className="text-lg font-semibold text-yellow-400">
+            Pending Approvals ({pendingApprovals.length})
+          </h2>
+          {pendingApprovals.map((a: any) => (
+            <ApprovalCard key={a.id} approval={a} onApprove={handleApprove} onReject={handleReject} />
+          ))}
+        </div>
+      )}
 
       {/* Brain Status */}
       <div className="bg-[#12121a] border border-[#2a2a3e] rounded-xl p-4">
@@ -85,10 +141,10 @@ export default function TradingPage() {
         ))}
       </div>
 
-      {/* Chart */}
+      {/* Chart with real data */}
       <div className="bg-[#12121a] border border-[#2a2a3e] rounded-xl p-4">
         <h2 className="text-lg font-semibold mb-3">XAUUSD Chart</h2>
-        <TradingChart data={[]} zones={zones?.zones ?? []} />
+        <TradingChart data={chartData} zones={zones?.zones ?? []} />
       </div>
 
       {/* Positions */}
