@@ -480,7 +480,7 @@ class TradingBrain:
             if not self.monitor.is_running:
                 await self.monitor.start()
 
-        # 2. Recover managed positions
+        # 2. Recover managed positions — use FRESH MT5 data, not stale DB
         saved_positions = state.get("positions", [])
         if saved_positions:
             try:
@@ -488,30 +488,37 @@ class TradingBrain:
             except Exception:
                 mt5_positions = []
 
-            mt5_tickets = {p.get("ticket") for p in mt5_positions}
+            # Index MT5 positions by ticket for fresh data lookup
+            mt5_by_ticket = {p.get("ticket"): p for p in mt5_positions}
 
             for saved in saved_positions:
                 ticket = saved.get("ticket")
-                if ticket in mt5_tickets:
+                mt5_pos = mt5_by_ticket.get(ticket)
+                if mt5_pos:
+                    # Use fresh MT5 values for SL/TP/volume, DB for brain-specific fields
+                    direction = saved.get("direction", "buy")
+                    if mt5_pos.get("type") is not None:
+                        direction = "buy" if mt5_pos["type"] == 0 else "sell"
                     managed = ManagedPosition(
                         ticket=ticket,
-                        symbol=saved.get("symbol", self._symbol),
-                        direction=saved.get("direction", "buy"),
-                        volume=saved.get("volume", 0.01),
-                        entry_price=saved.get("entry_price", 0),
-                        sl=saved.get("sl", 0),
-                        tp1=saved.get("tp1", 0),
+                        symbol=mt5_pos.get("symbol", saved.get("symbol", self._symbol)),
+                        direction=direction,
+                        volume=mt5_pos.get("volume", saved.get("volume", 0.01)),
+                        entry_price=mt5_pos.get("price_open", saved.get("entry_price", 0)),
+                        sl=mt5_pos.get("sl", saved.get("sl", 0)),
+                        tp1=mt5_pos.get("tp", saved.get("tp1", 0)),
                         tp2=saved.get("tp2", 0),
                         original_sl=saved.get("original_sl", 0),
                         be_moved=bool(saved.get("be_moved", 0)),
                         tp1_hit=bool(saved.get("tp1_hit", 0)),
-                        remaining_volume=saved.get("remaining_volume", 0),
+                        remaining_volume=mt5_pos.get("volume", saved.get("remaining_volume", 0)),
                         trail_sl=saved.get("trail_sl", 0),
                         zone_id=saved.get("zone_id", ""),
                         confluence_score=saved.get("confluence_score", 0),
                     )
                     await self.position_manager.add_position(managed)
-                    log.info("position_recovered", ticket=ticket)
+                    log.info("position_recovered", ticket=ticket,
+                             sl=managed.sl, tp1=managed.tp1, volume=managed.volume)
                 else:
                     self.persistence.close_position_record(ticket, "closed_offline", 0)
                     log.info("position_closed_offline", ticket=ticket)

@@ -688,9 +688,12 @@ class TestRecovery:
 
     @pytest.mark.asyncio
     async def test_recover_positions(self):
-        """Recovery resumes management of positions still open in MT5."""
+        """Recovery resumes management using FRESH MT5 data (not stale DB)."""
         mt5 = _make_mock_mt5()
-        mt5.get_positions.return_value = [{"ticket": 12345}]
+        mt5.get_positions.return_value = [
+            {"ticket": 12345, "symbol": "XAUUSD", "type": 1, "volume": 0.03,
+             "price_open": 2665.0, "sl": 2680.0, "tp": 2640.0, "profit": 15.0}
+        ]
         brain = TradingBrain(mt5)
 
         brain.persistence = MagicMock()
@@ -730,6 +733,10 @@ class TestRecovery:
         managed = brain.position_manager.add_position.call_args[0][0]
         assert managed.ticket == 12345
         assert managed.direction == "sell"
+        # Fresh MT5 data used instead of stale DB values
+        assert managed.volume == 0.03  # from MT5, not DB's 0.01
+        assert managed.sl == 2680.0  # from MT5, not DB's 2675.0
+        assert managed.entry_price == 2665.0  # from MT5
 
     @pytest.mark.asyncio
     async def test_recover_closed_offline(self):
