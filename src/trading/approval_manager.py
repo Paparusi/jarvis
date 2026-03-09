@@ -134,11 +134,20 @@ class ApprovalManager:
             tp_dist = abs(approval["tp1"] - approval["price"])
             rr_ratio = tp_dist / sl_dist
 
+        # Get open positions for RiskGuard check
+        try:
+            open_positions = await self._mt5.get_positions()
+        except Exception:
+            open_positions = []
+
         veto = self._risk_guard.check_entry(
             risk_pct=approval.get("risk_pct", 1.0),
             lot_size=approval["lot"],
             rr_ratio=rr_ratio,
             direction=approval["direction"],
+            session=self._detect_session(),
+            open_positions=open_positions,
+            calendar_warnings=[],
         )
         if not veto.approved:
             self._db.update_approval(
@@ -275,6 +284,16 @@ class ApprovalManager:
                 await cb(event)
             except Exception:
                 pass
+
+    @staticmethod
+    def _detect_session() -> str:
+        """Auto-detect current trading session based on UTC time."""
+        hour = datetime.now(timezone.utc).hour
+        if 7 <= hour < 12:
+            return "London"
+        elif 12 <= hour < 17:
+            return "New York"
+        return "London"
 
     @staticmethod
     def _determine_order_type(direction: str, zone_price: float, current: float) -> str:
