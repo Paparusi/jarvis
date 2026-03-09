@@ -55,6 +55,21 @@ def create_app(app: JarvisApp | None = None) -> FastAPI:
 
     adapter = WebAdapter(app)
 
+    # Track connected trading WS clients
+    trading_ws_clients: list = []
+
+    async def _push_trading_ws(event: dict):
+        """Broadcast event to all connected trading WebSocket clients."""
+        dead = []
+        for ws in trading_ws_clients:
+            try:
+                await ws.send_json(event)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            if ws in trading_ws_clients:
+                trading_ws_clients.remove(ws)
+
     # --- WebSocket chat ---
     @fastapi_app.websocket("/ws/chat")
     async def websocket_chat(ws: WebSocket):
@@ -95,6 +110,30 @@ def create_app(app: JarvisApp | None = None) -> FastAPI:
                 await ws.send_json({"type": "error", "text": str(e)})
             except Exception:
                 pass
+
+    # --- WebSocket trading ---
+    @fastapi_app.websocket("/ws/trading")
+    async def websocket_trading(websocket: WebSocket):
+        await websocket.accept()
+        trading_ws_clients.append(websocket)
+        log.info("trading_ws_connected")
+        try:
+            while True:
+                data = await websocket.receive_json()
+                if data.get("type") == "ping":
+                    await websocket.send_json({"type": "pong"})
+        except Exception:
+            pass
+        finally:
+            if websocket in trading_ws_clients:
+                trading_ws_clients.remove(websocket)
+            log.info("trading_ws_disconnected")
+
+    # Wire WS push callback to approval_manager if trading brain is available
+    if (adapter._app
+            and getattr(adapter._app, 'trading_brain', None)
+            and hasattr(adapter._app.trading_brain, 'approval_manager')):
+        adapter._app.trading_brain.approval_manager.on_ws_event(_push_trading_ws)
 
     # --- REST API ---
     @fastapi_app.get("/")
@@ -145,6 +184,44 @@ def create_app(app: JarvisApp | None = None) -> FastAPI:
     async def api_trading_control(request: dict):
         action = request.get("action", "")
         return JSONResponse(await adapter.trading_control(action))
+
+    # --- Trading Approvals & Candles API ---
+    @fastapi_app.get("/api/trading/approvals")
+    async def api_trading_approvals():
+        if not adapter._app or not getattr(adapter._app, 'trading_brain', None):
+            return JSONResponse({"approvals": []})
+        approvals = adapter._app.trading_brain.approval_manager.get_pending()
+        return JSONResponse({"approvals": approvals})
+
+    @fastapi_app.post("/api/trading/approve/{approval_id}")
+    async def api_trading_approve(approval_id: str):
+        if not adapter._app or not getattr(adapter._app, 'trading_brain', None):
+            return JSONResponse({"error": "Trading brain unavailable"})
+        result = await adapter._app.trading_brain.handle_approval_response(
+            approval_id, "approve", via="dashboard"
+        )
+        return JSONResponse(result)
+
+    @fastapi_app.post("/api/trading/reject/{approval_id}")
+    async def api_trading_reject(approval_id: str):
+        if not adapter._app or not getattr(adapter._app, 'trading_brain', None):
+            return JSONResponse({"error": "Trading brain unavailable"})
+        result = await adapter._app.trading_brain.handle_approval_response(
+            approval_id, "reject", via="dashboard"
+        )
+        return JSONResponse(result)
+
+    @fastapi_app.get("/api/trading/candles")
+    async def api_trading_candles(
+        symbol: str = "XAUUSD", timeframe: str = "H1", count: int = 100
+    ):
+        try:
+            from src.trading.mt5_client import MT5Client
+            client = MT5Client()
+            candles = await client.get_rates(symbol, timeframe, count)
+            return JSONResponse({"candles": candles})
+        except Exception as e:
+            return JSONResponse({"candles": [], "error": str(e)})
 
     # --- Memory, Activity, System API ---
     @fastapi_app.get("/api/memory/search")

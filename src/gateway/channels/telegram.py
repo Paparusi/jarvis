@@ -197,6 +197,9 @@ class TelegramAdapter:
             # Wire trading brain notifications to Telegram
             if self._trading_brain is not None:
                 self._trading_brain.on_notify(self._send_trading_notification)
+                # Wire approval gate notifications (separate from general brain notify)
+                if hasattr(self._trading_brain, 'approval_manager'):
+                    self._trading_brain.approval_manager.on_notify(self._send_trading_notification)
 
             # Wire dreamtime callback if dreamtime was initialized
             if self._dreamtime is not None:
@@ -507,17 +510,28 @@ class TelegramAdapter:
             except Exception:
                 log.error("proactive_send_failed", type=insight.type, error=str(e))
 
-    async def _send_trading_notification(self, message: str) -> None:
-        """Send trading brain notification to owner via Telegram with action buttons."""
+    async def _send_trading_notification(self, event_type_or_msg: str, data: dict | None = None) -> None:
+        """Send trading brain notification to owner via Telegram.
+
+        Called in two ways:
+        - From TradingBrain._notify(message): single string arg
+        - From ApprovalManager.on_notify(event_type, data): two args
+        """
         owner_id = os.environ.get("JARVIS_OWNER_ID", "")
         if not owner_id or not self._app:
             return
 
-        # Add trading action buttons to alerts
+        # --- Approval event: rich message with inline buttons ---
+        if event_type_or_msg == "approval" and isinstance(data, dict):
+            await self._send_approval_alert(int(owner_id), data)
+            return
+
+        # --- Default: plain text notification with basic buttons ---
+        message = event_type_or_msg
         keyboard = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("📊 Phân tích", callback_data="menu:analyze"),
-                InlineKeyboardButton("📋 Positions", callback_data="menu:positions"),
+                InlineKeyboardButton("\U0001f4ca Ph\u00e2n t\u00edch", callback_data="menu:analyze"),
+                InlineKeyboardButton("\U0001f4cb Positions", callback_data="menu:positions"),
             ],
         ])
 
@@ -531,6 +545,64 @@ class TelegramAdapter:
             log.info("trading_notification_sent", length=len(message))
         except Exception as e:
             log.error("trading_notification_failed", error=str(e))
+
+    async def _send_approval_alert(self, chat_id: int, approval: dict) -> None:
+        """Send a rich approval alert with Approve/Reject/Detail inline buttons."""
+        approval_id = approval.get("id", "unknown")
+        symbol = approval.get("symbol", "XAUUSD")
+        direction = approval.get("direction", "buy")
+        direction_emoji = "\U0001f7e2" if direction == "buy" else "\U0001f534"
+        order_type = approval.get("order_type", "limit").upper()
+        price = approval.get("price", 0)
+        sl = approval.get("sl", 0)
+        tp1 = approval.get("tp1", 0)
+        tp2 = approval.get("tp2")
+        lot = approval.get("lot", 0)
+        risk_pct = approval.get("risk_pct", 0)
+        risk_usd = approval.get("risk_usd", 0)
+        confluence = approval.get("confluence_score", 0)
+        analysis = approval.get("analysis", "N/A") or "N/A"
+
+        # Truncate analysis to 500 chars
+        if len(analysis) > 500:
+            analysis = analysis[:497] + "..."
+
+        tp2_text = f"{tp2}" if tp2 else "\u2014"
+
+        text = (
+            f"\U0001f514 TRADE SIGNAL \u2014 {symbol}\n"
+            f"\n"
+            f"\U0001f4ca Ph\u00e2n t\u00edch:\n{analysis}\n"
+            f"\n"
+            f"\U0001f4c8 Entry Plan:\n"
+            f"\u2022 {direction_emoji} {order_type} @ {price}\n"
+            f"\u2022 SL: {sl} | TP1: {tp1} | TP2: {tp2_text}\n"
+            f"\u2022 Lot: {lot} (risk {risk_pct}% \u2248 ${risk_usd:.0f})\n"
+            f"\u2022 Confluence: {confluence}/100\n"
+            f"\n"
+            f"\u2696\ufe0f Risk Guard: \u2705 PASS"
+        )
+
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("\u2705 Approve", callback_data=f"trade_approve:{approval_id}"),
+                InlineKeyboardButton("\u274c Reject", callback_data=f"trade_reject:{approval_id}"),
+            ],
+            [
+                InlineKeyboardButton("\U0001f4ca Chi ti\u1ebft", callback_data=f"trade_detail:{approval_id}"),
+            ],
+        ])
+
+        try:
+            await self._app.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                disable_web_page_preview=True,
+                reply_markup=keyboard,
+            )
+            log.info("approval_alert_sent", approval_id=approval_id, symbol=symbol)
+        except Exception as e:
+            log.error("approval_alert_failed", approval_id=approval_id, error=str(e))
 
     # --- Command Handlers ---
 
@@ -1839,6 +1911,98 @@ class TelegramAdapter:
                         return
                 await self._handle_message(update, context, override_text=prompt)
                 return
+
+        # Handle trade approval callbacks
+        if data.startswith("trade_approve:"):
+            approval_id = data.split(":", 1)[1]
+            await query.answer("\u23f3 \u0110ang x\u1eed l\u00fd...")
+            if not self._trading_brain:
+                try:
+                    await query.edit_message_text("\u274c Trading Brain kh\u00f4ng kh\u1ea3 d\u1ee5ng.")
+                except Exception:
+                    pass
+                return
+            try:
+                result = await self._trading_brain.handle_approval_response(
+                    approval_id, "approve", via="telegram"
+                )
+                if result.get("ticket"):
+                    await query.edit_message_text(
+                        f"\u2705 Approved \u2014 Order placed #{result['ticket']}"
+                    )
+                elif result.get("error"):
+                    await query.edit_message_text(
+                        f"\u26a0\ufe0f Approve failed: {result['error']}"
+                    )
+                else:
+                    await query.edit_message_text("\u2705 Approved")
+            except Exception as e:
+                log.error("trade_approve_failed", approval_id=approval_id, error=str(e))
+                try:
+                    await query.edit_message_text(f"\u274c L\u1ed7i: {e}")
+                except Exception:
+                    pass
+            return
+
+        if data.startswith("trade_reject:"):
+            approval_id = data.split(":", 1)[1]
+            await query.answer("\u274c Rejecting...")
+            if not self._trading_brain:
+                try:
+                    await query.edit_message_text("\u274c Trading Brain kh\u00f4ng kh\u1ea3 d\u1ee5ng.")
+                except Exception:
+                    pass
+                return
+            try:
+                await self._trading_brain.handle_approval_response(
+                    approval_id, "reject", via="telegram"
+                )
+                await query.edit_message_text(
+                    f"\u274c Trade rejected by Bi"
+                )
+            except Exception as e:
+                log.error("trade_reject_failed", approval_id=approval_id, error=str(e))
+                try:
+                    await query.edit_message_text(f"\u274c L\u1ed7i: {e}")
+                except Exception:
+                    pass
+            return
+
+        if data.startswith("trade_detail:"):
+            approval_id = data.split(":", 1)[1]
+            await query.answer()
+            if not self._trading_brain:
+                return
+            try:
+                approval = self._trading_brain.persistence.get_approval(approval_id)
+                if not approval:
+                    await query.message.reply_text(
+                        f"\u26a0\ufe0f Kh\u00f4ng t\u00ecm th\u1ea5y approval {approval_id}"
+                    )
+                    return
+                # Build detailed analysis message
+                analysis = approval.get("analysis", "N/A") or "N/A"
+                smc = approval.get("smc_summary", "") or ""
+                direction_emoji = "\U0001f7e2" if approval.get("direction") == "buy" else "\U0001f534"
+                tp2_text = f"{approval.get('tp2')}" if approval.get("tp2") else "\u2014"
+                detail_text = (
+                    f"\U0001f4cb CHI TI\u1eben TRADE SIGNAL\n"
+                    f"ID: {approval_id}\n"
+                    f"Status: {approval.get('status', 'pending')}\n\n"
+                    f"{direction_emoji} {approval.get('direction', '').upper()} {approval.get('symbol', 'XAUUSD')}\n"
+                    f"Order: {approval.get('order_type', 'N/A').upper()} @ {approval.get('price', 0)}\n"
+                    f"SL: {approval.get('sl', 0)} | TP1: {approval.get('tp1', 0)} | TP2: {tp2_text}\n"
+                    f"Lot: {approval.get('lot', 0)} (risk {approval.get('risk_pct', 0)}% \u2248 ${approval.get('risk_usd', 0):.0f})\n"
+                    f"Confluence: {approval.get('confluence_score', 0)}/100\n\n"
+                    f"\U0001f4ca PH\u00c2N T\u00cdCH:\n{analysis}\n"
+                )
+                if smc:
+                    detail_text += f"\n\U0001f9e0 SMC Summary:\n{smc}\n"
+                detail_text += f"\n\u23f0 Created: {approval.get('created_at', 'N/A')}"
+                await query.message.reply_text(detail_text)
+            except Exception as e:
+                log.error("trade_detail_failed", approval_id=approval_id, error=str(e))
+            return
 
         if not data.startswith("feedback:"):
             return
