@@ -605,8 +605,22 @@ class AgentLoop:
                     return None
         return None
 
+    # Tools that must NEVER be cached — they return real-time data
+    _NOCACHE_TOOLS = frozenset({
+        "mt5_get_price", "mt5_get_tick", "mt5_get_positions", "mt5_get_orders",
+        "mt5_place_order", "mt5_close_position", "mt5_modify_position",
+        "mt5_get_candles", "mt5_account_info", "mt5_place_pending",
+        "mt5_modify_order", "mt5_cancel_order", "mt5_get_pending_orders",
+        "trade_plan", "trade_status", "trade_control", "trade_pending",
+        "trade_config", "web_search", "deep_search", "browse_web",
+    })
+
     async def _execute_tool_cached(self, name: str, args: dict) -> ToolResult:
         """Execute a tool with short-TTL caching to avoid redundant calls."""
+        # Never cache real-time tools
+        if name in self._NOCACHE_TOOLS:
+            return await self._tools.execute(name, **args)
+
         import hashlib
         cache_key = f"{name}:{hashlib.md5(json.dumps(args, sort_keys=True).encode()).hexdigest()[:12]}"
         now = time.time()

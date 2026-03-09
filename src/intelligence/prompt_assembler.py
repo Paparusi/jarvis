@@ -18,6 +18,7 @@ Token budget ensures we don't exceed context window limits.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -143,6 +144,17 @@ class PromptAssembler:
     def update_skill_summary(self, summary: str) -> None:
         self._skill_summary = summary
 
+    _TRADING_PATTERN = re.compile(
+        r"(?i)(?:xauusd|gold|vàng|giá vàng|mt5|trading|trade|lệnh|position|pending"
+        r"|phân tích.*(?:thị trường|market|chart|kỹ thuật|technical)"
+        r"|giá|price|bid|ask|spread|pip|setup|zone|entry|sl|tp)"
+    )
+
+    @classmethod
+    def _is_trading_query(cls, query: str) -> bool:
+        """Check if user query is about trading/market data."""
+        return bool(cls._TRADING_PATTERN.search(query))
+
     def _build_tool_descriptions(self) -> str:
         """Auto-generate tool descriptions from registry."""
         if not self._tool_registry:
@@ -183,6 +195,18 @@ class PromptAssembler:
             system_parts.append(tool_desc)
 
         system_parts.append(time_context)
+
+        # Trading freshness instruction — force LLM to use real-time data
+        if self._is_trading_query(user_message):
+            system_parts.append(
+                "\n# ⚠️ TRADING DATA FRESHNESS RULE\n"
+                "Câu hỏi này liên quan đến trading/thị trường. BẮT BUỘC:\n"
+                "1. LUÔN gọi mt5_get_price hoặc mt5_get_tick để lấy giá THỜI GIAN THỰC\n"
+                "2. LUÔN gọi mt5_get_positions để kiểm tra vị thế HIỆN TẠI\n"
+                "3. KHÔNG dùng giá/position từ bộ nhớ hoặc lịch sử chat — chúng ĐÃ CŨ\n"
+                "4. KHÔNG lặp lại phân tích cũ — phân tích lại với data mới\n"
+                "5. Nếu setup đã chạy qua (giá đã vượt zone), nói rõ setup ĐÃ INVALIDATE\n"
+            )
 
         if self._skill_summary:
             system_parts.append(f"\n{self._skill_summary}")

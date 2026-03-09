@@ -42,6 +42,14 @@ _AGING_THRESHOLD = 30 * 86400      # 7-30 days = aging
 # Categories that rarely become stale
 _DURABLE_CATEGORIES = {"user_identity", "user_directive"}
 
+# Trading-related keywords for identifying trading memories/queries
+_TRADING_KEYWORDS = re.compile(
+    r"(?i)(?:xauusd|gold|vàng|giá vàng|mt5|trading|trade|lệnh|position|pending"
+    r"|buy|sell|sl|tp|lot|pip|spread|bid|ask|order|entry|exit|profit|loss"
+    r"|phân tích.*(?:thị trường|kỹ thuật|technical)|setup|zone|confluence"
+    r"|risk|reward|breakeven|trailing|support|resistance|fibonacci|session)"
+)
+
 
 class MemoryManager:
     """Central memory coordinator for JARVIS."""
@@ -130,13 +138,20 @@ class MemoryManager:
 
         # 1. Search semantic memory for relevant facts (with freshness)
         memories = await self.semantic.search(query, top_k=5, min_similarity=0.25)
+        is_trading_query = self._is_trading_query(query)
         if memories:
             now_ts = time.time()
             fact_lines = []
             for m in memories:
                 cat = m.get("category", "general")
-                label = _CATEGORY_LABELS.get(cat, "Thông tin")
                 content = m["content"]
+                # Skip stale trading memories — prices/positions/analysis expire fast
+                if is_trading_query and self._is_trading_memory(content):
+                    freshness = self._memory_freshness(m, now_ts)
+                    if freshness in ("stale", "aging"):
+                        log.debug("skip_stale_trading_memory", content=content[:60])
+                        continue
+                label = _CATEGORY_LABELS.get(cat, "Thông tin")
                 freshness = self._memory_freshness(m, now_ts)
                 if freshness == "stale":
                     content += " ⚠️(có thể đã cũ, hãy xác nhận nếu dùng)"
@@ -247,6 +262,16 @@ class MemoryManager:
         )
 
     @staticmethod
+    def _is_trading_query(query: str) -> bool:
+        """Check if a query is about trading/market data."""
+        return bool(_TRADING_KEYWORDS.search(query))
+
+    @staticmethod
+    def _is_trading_memory(content: str) -> bool:
+        """Check if a memory contains trading-specific data (prices, positions, analysis)."""
+        return bool(_TRADING_KEYWORDS.search(content))
+
+    @staticmethod
     def _memory_freshness(memory: dict, now_ts: float) -> str:
         """Determine if a memory is fresh, aging, or stale."""
         cat = memory.get("category", "general")
@@ -263,6 +288,15 @@ class MemoryManager:
             age_seconds = now_ts - dt.timestamp()
         except (ValueError, TypeError):
             return "fresh"
+
+        # Trading memories expire much faster (prices/positions change constantly)
+        content = memory.get("content", "")
+        if _TRADING_KEYWORDS.search(content):
+            if age_seconds < 3600:       # < 1 hour = fresh
+                return "fresh"
+            elif age_seconds < 14400:    # 1-4 hours = aging
+                return "aging"
+            return "stale"
 
         if age_seconds < _FRESH_THRESHOLD:
             return "fresh"
