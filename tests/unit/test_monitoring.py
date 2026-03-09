@@ -14,7 +14,6 @@ from src.monitoring.metrics import (
     brain_local_ratio,
     brain_training_runs_total,
     skills_total,
-    health_ollama,
     health_db,
     sync_from_health,
     sync_from_skills,
@@ -38,7 +37,6 @@ class TestMetricsDefinition:
         assert brain_training_runs_total is not None
 
     def test_health_gauges_exist(self):
-        assert health_ollama is not None
         assert health_db is not None
 
     def test_init_info(self):
@@ -49,7 +47,6 @@ class TestMetricsDefinition:
 class TestSyncFromHealth:
     def test_sync_sets_gauges(self):
         health = MagicMock()
-        health.ollama_available = True
         health.api_keys_ok = True
         health.disk_ok = False
         health.db_ok = True

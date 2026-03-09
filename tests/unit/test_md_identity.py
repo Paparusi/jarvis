@@ -73,10 +73,9 @@ class TestAgentsMd:
         agents_md = Path("/home/admin_1/projects/jarvis/workspace/AGENTS.md")
         assert agents_md.exists()
 
-    def test_agents_md_updated_to_phase_8(self):
+    def test_agents_md_has_current_architecture(self):
         content = Path("/home/admin_1/projects/jarvis/workspace/AGENTS.md").read_text()
-        assert "Phase 8" in content
-        assert "Brain Independence" in content
+        assert "Architecture" in content
 
     def test_agents_md_references_jarvis_md(self):
         content = Path("/home/admin_1/projects/jarvis/workspace/AGENTS.md").read_text()

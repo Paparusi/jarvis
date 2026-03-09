@@ -129,11 +129,6 @@ memory_retrieval_latency = Histogram(
 
 # ── System Health ─────────────────────────────────────────────────────
 
-health_ollama = Gauge(
-    "jarvis_health_ollama_up",
-    "Ollama availability (1=up, 0=down)",
-)
-
 health_api_keys = Gauge(
     "jarvis_health_api_keys_ok",
     "API keys valid (1=ok, 0=invalid)",
@@ -241,7 +236,6 @@ def sync_from_tracker(tracker) -> None:
 def sync_from_health(health_state) -> None:
     """Pull health state into Prometheus gauges."""
     try:
-        health_ollama.set(1 if health_state.ollama_available else 0)
         health_api_keys.set(1 if health_state.api_keys_ok else 0)
         health_disk.set(1 if health_state.disk_ok else 0)
         health_db.set(1 if health_state.db_ok else 0)

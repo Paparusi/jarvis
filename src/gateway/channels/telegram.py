@@ -10,7 +10,7 @@ import os
 import time as _time
 from pathlib import Path
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, Update
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -135,6 +135,16 @@ def needs_tools(text: str) -> bool:
 
 _REQUEST_TIMEOUT = 90  # seconds — max time for a single request end-to-end
 
+_MAIN_MENU_KEYBOARD = ReplyKeyboardMarkup(
+    [
+        [KeyboardButton("📊 Status"), KeyboardButton("🧠 Memory")],
+        [KeyboardButton("📈 Trading"), KeyboardButton("🔍 Search")],
+        [KeyboardButton("⚙️ Settings"), KeyboardButton("❓ Help")],
+    ],
+    resize_keyboard=True,
+    is_persistent=True,
+)
+
 
 class TelegramAdapter:
     """Telegram bot adapter for JARVIS with memory, skills, and routing."""
@@ -182,6 +192,11 @@ class TelegramAdapter:
             self._mcp_bridge = app._mcp_bridge
             self._bounty_pipeline = app.bounty_pipeline
             self._hunter_pipeline = app.hunter_pipeline
+            self._trading_brain = app.trading_brain
+
+            # Wire trading brain notifications to Telegram
+            if self._trading_brain is not None:
+                self._trading_brain.on_notify(self._send_trading_notification)
 
             # Wire dreamtime callback if dreamtime was initialized
             if self._dreamtime is not None:
@@ -277,6 +292,9 @@ class TelegramAdapter:
             # Hunter Pipeline — not available in legacy path
             self._hunter_pipeline = None
 
+            # Trading Brain — not available in legacy path
+            self._trading_brain = None
+
         # Subscribe event bus — DataCollector auto-logs via events (BOTH paths)
         self._bus.subscribe(EventType.TOOL_CALLED, self._on_tool_called)
 
@@ -313,6 +331,9 @@ class TelegramAdapter:
         self._app.add_handler(CommandHandler("pentest", self._handle_pentest))
         self._app.add_handler(CommandHandler("bounty", self._handle_bounty))
         self._app.add_handler(CommandHandler("hunt", self._handle_hunt))
+        self._app.add_handler(CommandHandler("mt5", self._handle_mt5))
+        self._app.add_handler(CommandHandler("trade", self._handle_trade))
+        self._app.add_handler(CommandHandler("help", self._handle_help))
         self._app.add_handler(CallbackQueryHandler(self._handle_feedback))
         self._app.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message)
@@ -331,6 +352,24 @@ class TelegramAdapter:
         await self._app.initialize()
         await self._app.start()
         await self._app.updater.start_polling(drop_pending_updates=True)
+
+        # Register bot commands menu for Telegram UI
+        from telegram import BotCommand
+        try:
+            await self._app.bot.set_my_commands([
+                BotCommand("start", "Menu chính"),
+                BotCommand("status", "Trạng thái hệ thống"),
+                BotCommand("mt5", "Giá & tài khoản MT5"),
+                BotCommand("trade", "Trading Brain"),
+                BotCommand("memory", "Bộ nhớ"),
+                BotCommand("skills", "Kỹ năng"),
+                BotCommand("health", "Kiểm tra sức khỏe"),
+                BotCommand("digest", "Tin tức hôm nay"),
+                BotCommand("help", "Trợ giúp"),
+            ])
+            log.info("bot_commands_registered")
+        except Exception as e:
+            log.warning("bot_commands_register_failed", error=str(e))
 
         # Start scheduler with Telegram notification callback
         self._scheduler.set_notification_callback(self._send_notification)
@@ -403,18 +442,36 @@ class TelegramAdapter:
         return [str(uid) for uid in admin_ids]
 
     async def _send_notification(self, user_id: str, message: str) -> None:
-        """Send a proactive notification to a user via Telegram."""
+        """Send notification with optional action buttons for specific alert types."""
         if not self._app:
             return
+
+        # Add action buttons for specific alert types
+        keyboard = None
+        if "Disk" in message or "disk" in message:
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🏥 Health Check", callback_data="menu:health")]
+            ])
+        elif "API" in message or "key" in message.lower():
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📊 Status", callback_data="menu:status")]
+            ])
+
         try:
             await self._app.bot.send_message(
                 chat_id=int(user_id),
                 text=message,
                 parse_mode="Markdown",
+                reply_markup=keyboard,
             )
             log.info("notification_sent", user_id=user_id)
-        except Exception as e:
-            log.error("notification_failed", user_id=user_id, error=str(e))
+        except Exception:
+            try:
+                await self._app.bot.send_message(
+                    chat_id=int(user_id), text=message, reply_markup=keyboard,
+                )
+            except Exception as e:
+                log.error("notification_failed", user_id=user_id, error=str(e))
 
     async def _handle_proactive_insight(self, insight) -> None:
         """Handle ProactiveInsight → send to owner via Telegram."""
@@ -450,6 +507,31 @@ class TelegramAdapter:
             except Exception:
                 log.error("proactive_send_failed", type=insight.type, error=str(e))
 
+    async def _send_trading_notification(self, message: str) -> None:
+        """Send trading brain notification to owner via Telegram with action buttons."""
+        owner_id = os.environ.get("JARVIS_OWNER_ID", "")
+        if not owner_id or not self._app:
+            return
+
+        # Add trading action buttons to alerts
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("📊 Phân tích", callback_data="menu:analyze"),
+                InlineKeyboardButton("📋 Positions", callback_data="menu:positions"),
+            ],
+        ])
+
+        try:
+            await self._app.bot.send_message(
+                chat_id=int(owner_id),
+                text=message,
+                disable_web_page_preview=True,
+                reply_markup=keyboard,
+            )
+            log.info("trading_notification_sent", length=len(message))
+        except Exception as e:
+            log.error("trading_notification_failed", error=str(e))
+
     # --- Command Handlers ---
 
     async def _handle_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -458,27 +540,59 @@ class TelegramAdapter:
         tools_count = len(self._tool_registry.get_all())
         await update.message.reply_text(
             f"Xin chào {user.first_name}! 👋\n\n"
-            f"Tôi là **JARVIS** — trợ lý AI cá nhân của bạn.\n"
-            f"🧠 Bộ nhớ dài hạn | ⚡ Local AI + Cloud | 🎯 {skills_count} skills | 🔧 {tools_count} tools\n\n"
-            f"💡 **Tôi có thể:**\n"
-            f"• Chat text, voice, gửi file/ảnh\n"
-            f"• Nhớ thông tin qua các cuộc trò chuyện\n"
-            f"• Tìm kiếm web, chạy code, phân tích dữ liệu\n"
-            f"• Đặt nhắc nhở bằng ngôn ngữ tự nhiên\n\n"
-            f"⌨️ **Commands:**\n"
-            f"/status — Trạng thái hệ thống\n"
-            f"/health — Kiểm tra sức khỏe\n"
-            f"/stats — Thống kê chi tiết\n"
-            f"/profile — Xem Digital Twin\n"
-            f"/memory — Xem bộ nhớ\n"
-            f"/remember `<text>` — Ghi nhớ\n"
-            f"/remind `<text>` — Đặt nhắc nhở\n"
-            f"/reminders — Xem nhắc nhở\n"
-            f"/skills — Xem kỹ năng\n"
-            f"/explain — Giải thích reasoning\n"
-            f"/train — Training data\n"
-            f"/reset — Reset trò chuyện",
+            f"Tôi là **JARVIS** — trợ lý AI cá nhân.\n"
+            f"☁️ Claude AI | 🧠 Long-term Memory | 🎯 {skills_count} skills | 🔧 {tools_count} tools\n\n"
+            f"📈 Trading Brain (XAUUSD) | 🔍 Web Search | 📄 RAG\n\n"
+            f"Dùng menu bên dưới hoặc chat tự nhiên.",
             parse_mode="Markdown",
+            reply_markup=_MAIN_MENU_KEYBOARD,
+        )
+
+    async def _handle_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show help with available commands."""
+        await update.message.reply_text(
+            "📚 **JARVIS Commands:**\n\n"
+            "📊 /status — Trạng thái hệ thống\n"
+            "🧠 /memory — Xem bộ nhớ\n"
+            "📝 /remember `<text>` — Ghi nhớ\n"
+            "📈 /mt5 — Giá & MT5\n"
+            "🤖 /trade — Trading Brain\n"
+            "🔍 /digest — Tin tức\n"
+            "🎯 /skills — Kỹ năng\n"
+            "🏥 /health — Sức khỏe\n"
+            "⏰ /remind `<text>` — Nhắc nhở\n"
+            "📋 /reminders — Xem nhắc nhở\n"
+            "📊 /stats — Thống kê chi tiết\n"
+            "👤 /profile — Digital Twin\n"
+            "🔄 /reset — Reset trò chuyện\n\n"
+            "💡 Hoặc chat tự nhiên bằng text, voice, gửi file/ảnh.",
+            parse_mode="Markdown",
+        )
+
+    async def _show_trading_menu(self, update: Update) -> None:
+        """Show inline trading sub-menu."""
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("💰 Giá XAUUSD", callback_data="menu:mt5_price"),
+                InlineKeyboardButton("📊 Phân tích", callback_data="menu:analyze"),
+            ],
+            [
+                InlineKeyboardButton("📋 Positions", callback_data="menu:positions"),
+                InlineKeyboardButton("📜 History", callback_data="menu:history"),
+            ],
+            [
+                InlineKeyboardButton("🧠 Trade Plan", callback_data="menu:trade_plan"),
+                InlineKeyboardButton("⚙️ Config", callback_data="menu:trade_config"),
+            ],
+            [
+                InlineKeyboardButton("▶️ Start Brain", callback_data="menu:trade_start"),
+                InlineKeyboardButton("⏹ Stop Brain", callback_data="menu:trade_stop"),
+            ],
+            [InlineKeyboardButton("◀️ Back", callback_data="menu:back")],
+        ])
+        message = update.callback_query.message if update.callback_query else update.message
+        await message.reply_text(
+            "📈 **Trading Menu:**", parse_mode="Markdown", reply_markup=keyboard,
         )
 
     async def _handle_health(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -488,9 +602,8 @@ class TelegramAdapter:
         from src.metacognition.diagnostics import SelfDiagnostics
         report = SelfDiagnostics().format_report(checks)
         # Add degradation mode info
-        mode = self._health_monitor.health.degraded_mode
-        if mode:
-            report += f"\n\n🔶 **Chế độ**: {mode}"
+        if not self._health_monitor.health.api_keys_ok:
+            report += "\n\n🔶 **Cảnh báo**: API keys thiếu"
         try:
             await update.message.reply_text(report, parse_mode="Markdown")
         except Exception:
@@ -509,7 +622,6 @@ class TelegramAdapter:
         skills_count = len(self._skill_loader.get_all_metadata())
         user_stats = self._user_model.get_stats(user_id)
 
-        local_status = "ON" if router_stats["local_enabled"] else "OFF"
         tool_stats = router_stats.get("tools", {})
 
         # Per-model breakdown
@@ -537,7 +649,6 @@ class TelegramAdapter:
             f"  Topics tracked: {user_stats['topics_tracked']}\n"
             f"  Avg msg length: {user_stats['avg_msg_length']:.0f} chars\n\n"
             f"⚡ **Router**\n"
-            f"  Local: {local_status} (`{router_stats['local_model']}`)\n"
             f"  Cloud: `{router_stats['cloud_model']}`\n"
             f"  Cache: {cache_stats['cached_entries']} entries, {cache_stats['total_hits']} hits\n"
             f"  Escalation rate: {trace_stats.get('escalation_rate', 'N/A')}\n"
@@ -951,6 +1062,27 @@ class TelegramAdapter:
             log.warning("message_blocked", user_id=user_id, category=safety.category)
             return
 
+        # Route main menu button presses
+        if text == "📈 Trading":
+            await self._show_trading_menu(update)
+            return
+        if text in ("📊 Status", "🧠 Memory", "🔍 Search", "⚙️ Settings", "❓ Help"):
+            _MENU_HANDLERS = {
+                "📊 Status": "_handle_status",
+                "🧠 Memory": "_handle_memory",
+                "🔍 Search": None,
+                "⚙️ Settings": "_handle_health",
+                "❓ Help": "_handle_help",
+            }
+            handler_name = _MENU_HANDLERS.get(text)
+            if handler_name is None:
+                await update.message.reply_text("🔍 Tìm gì? Gõ câu hỏi tiếp theo.")
+                return
+            handler = getattr(self, handler_name, None)
+            if handler:
+                await handler(update, context)
+                return
+
         # Per-user lock — serialize requests from same user
         lock = self._get_user_lock(user_id)
         if lock.locked():
@@ -1021,13 +1153,18 @@ class TelegramAdapter:
         except Exception:
             pass
 
-        # Send "thinking" status message
+        # Send typing action immediately for fast feedback
         likely_tools = needs_tools(text)
+        try:
+            await update.effective_chat.send_action("typing")
+        except Exception:
+            pass
+
+        # Send status message with context
         status_msg = None
         try:
-            status_msg = await update.message.reply_text(
-                "🔍 Đang tìm kiếm..." if likely_tools else "💭"
-            )
+            status_text = "🔍 Đang tìm kiếm & phân tích..." if likely_tools else "💭 Đang suy nghĩ..."
+            status_msg = await update.message.reply_text(status_text)
         except Exception:
             pass
 
@@ -1131,7 +1268,21 @@ class TelegramAdapter:
                     await status_msg.delete()
                 except Exception:
                     pass
-            sent_msg = await self._send_response(update, response.content)
+
+            # Extract tools used from reasoning trace for context-aware buttons
+            tools_used = []
+            if response.reasoning_trace:
+                try:
+                    import json as _json
+                    for tc in _json.loads(response.reasoning_trace):
+                        if isinstance(tc, dict) and "name" in tc:
+                            tools_used.append(tc["name"])
+                except Exception:
+                    pass
+
+            sent_msg = await self._send_response(
+                update, response.content, user_message=text, tools_used=tools_used,
+            )
 
             # 10. Cache response context for feedback buttons
             if sent_msg:
@@ -1190,8 +1341,10 @@ class TelegramAdapter:
 
         buffer = ""
         last_edit_time = 0.0
+        route_start_time = _time.monotonic()
         _EDIT_INTERVAL = 1.2  # seconds between Telegram edits (rate limit)
         tool_status_lines: list[str] = []
+        tool_count = 0
         response: AgentResponse | None = None
 
         async for event in self._router.route_stream_tools(
@@ -1200,6 +1353,7 @@ class TelegramAdapter:
             skill_context=skill_context,
         ):
             if event.type == "tool_start":
+                tool_count += 1
                 emoji = _TOOL_EMOJI.get(event.tool_name, "🔧")
                 tool_status_lines.append(f"{emoji} _{event.tool_name}_...")
                 if status_msg:
@@ -1211,13 +1365,14 @@ class TelegramAdapter:
                         pass
 
             elif event.type == "tool_end":
-                # Update last tool line with result
+                # Update last tool line with result + elapsed time
                 if tool_status_lines:
                     emoji = "✅" if event.tool_success else "❌"
                     tool_status_lines[-1] = f"{emoji} _{event.tool_name}_"
                     if status_msg:
                         try:
-                            status_text = "\n".join(tool_status_lines) + "\n\n💭 Đang tổng hợp..."
+                            elapsed = int(_time.monotonic() - route_start_time)
+                            status_text = "\n".join(tool_status_lines) + f"\n\n💭 Đang tổng hợp... ({elapsed}s)"
                             await status_msg.edit_text(status_text, parse_mode="Markdown")
                         except Exception:
                             pass
@@ -1512,15 +1667,48 @@ class TelegramAdapter:
 
         return f"[Binary file: {path.name}, {path.stat().st_size} bytes]"
 
-    async def _send_response(self, update: Update, text: str):
-        """Send response with feedback buttons. Returns the last sent message."""
-        max_len = 4000
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("👍", callback_data="feedback:positive"),
-                InlineKeyboardButton("👎", callback_data="feedback:negative"),
-            ]
+    def _build_quick_actions(
+        self, user_message: str, response_text: str, tools_used: list[str] | None = None,
+    ) -> InlineKeyboardMarkup:
+        """Build context-aware quick action buttons."""
+        rows: list[list[InlineKeyboardButton]] = []
+        tools = tools_used or []
+        msg_lower = user_message.lower()
+
+        # Trading context
+        if any(t.startswith("mt5_") for t in tools) or any(
+            w in msg_lower for w in ("xauusd", "gold", "vàng", "trading", "giá")
+        ):
+            rows.append([
+                InlineKeyboardButton("📊 Phân tích", callback_data="quick:analyze"),
+                InlineKeyboardButton("📈 Trade Plan", callback_data="quick:trade_plan"),
+            ])
+        # Search/research context
+        elif any(t in ("web_search", "fetch_url") for t in tools):
+            rows.append([
+                InlineKeyboardButton("🔍 Tìm thêm", callback_data="quick:search_more"),
+                InlineKeyboardButton("📌 Nhớ giúp", callback_data="quick:remember"),
+            ])
+        # Long response — offer to remember
+        elif len(response_text) > 500:
+            rows.append([
+                InlineKeyboardButton("📌 Nhớ giúp", callback_data="quick:remember"),
+            ])
+
+        # Always add feedback row
+        rows.append([
+            InlineKeyboardButton("👍", callback_data="feedback:positive"),
+            InlineKeyboardButton("👎", callback_data="feedback:negative"),
         ])
+        return InlineKeyboardMarkup(rows)
+
+    async def _send_response(
+        self, update: Update, text: str,
+        user_message: str = "", tools_used: list[str] | None = None,
+    ):
+        """Send response with context-aware quick action buttons. Returns the last sent message."""
+        max_len = 4000
+        keyboard = self._build_quick_actions(user_message, text, tools_used)
 
         if len(text) <= max_len:
             try:
@@ -1581,6 +1769,76 @@ class TelegramAdapter:
 
         if data == "noop":
             return
+
+        # Handle quick action buttons
+        if data.startswith("quick:"):
+            action = data.split(":", 1)[1]
+            actions = {
+                "analyze": "phân tích kỹ thuật XAUUSD hiện tại",
+                "trade_plan": "tạo trade plan cho XAUUSD",
+                "search_more": "tìm thêm thông tin về chủ đề trước",
+                "remember": None,  # Special: remember last response
+            }
+            prompt = actions.get(action)
+            if prompt is None and action == "remember":
+                cached = self._response_cache.get(query.message.message_id)
+                if cached:
+                    session_key = self._memory.session_key("telegram", str(query.from_user.id))
+                    await self._memory.remember_fact(
+                        cached["model_response"][:500], category="user_saved",
+                    )
+                    await query.answer("📌 Đã lưu vào bộ nhớ!", show_alert=True)
+                else:
+                    await query.answer("⏰ Nội dung đã hết hạn", show_alert=False)
+                return
+            if prompt:
+                await query.answer("⏳ Đang xử lý...")
+                await self._handle_message(update, context, override_text=prompt)
+                return
+
+        # Handle menu callbacks
+        if data.startswith("menu:"):
+            action = data.split(":", 1)[1]
+            menu_prompts = {
+                "mt5_price": "check giá XAUUSD hiện tại",
+                "analyze": "phân tích kỹ thuật XAUUSD",
+                "positions": "/mt5 positions",
+                "history": "/mt5 history",
+                "trade_plan": "tạo trade plan cho session hiện tại",
+                "trade_config": "/trade config",
+                "trade_start": "/trade start",
+                "trade_stop": "/trade stop",
+                "health": None,
+                "status": None,
+                "back": None,
+            }
+            if action == "back":
+                await query.answer()
+                try:
+                    await query.message.delete()
+                except Exception:
+                    pass
+                return
+            if action == "health":
+                await query.answer("🏥 Đang kiểm tra...")
+                await self._handle_health(update, context)
+                return
+            if action == "status":
+                await query.answer("📊 Đang tải...")
+                await self._handle_status(update, context)
+                return
+            prompt = menu_prompts.get(action)
+            if prompt:
+                await query.answer("⏳ Đang xử lý...")
+                if prompt.startswith("/"):
+                    cmd = prompt.split()[0][1:]  # e.g. "mt5" from "/mt5 positions"
+                    args_text = prompt[len(prompt.split()[0]):].strip()
+                    handler = getattr(self, f"_handle_{cmd}", None)
+                    if handler:
+                        await handler(update, context)
+                        return
+                await self._handle_message(update, context, override_text=prompt)
+                return
 
         if not data.startswith("feedback:"):
             return
@@ -2272,6 +2530,220 @@ class TelegramAdapter:
         except Exception as e:
             log.error("hunt_command_error", error=str(e))
             await status_msg.edit_text(f"❌ Hunt error: {e}")
+
+    async def _handle_mt5(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """/mt5 — Quick MT5 status: account + XAUUSD price + positions."""
+        if not self._is_authorized(update):
+            return
+
+        status_msg = await update.message.reply_text("📊 Đang kết nối MT5...")
+
+        try:
+            from src.trading.mt5_client import MT5Client
+            import asyncio
+
+            client = MT5Client()
+            try:
+                available = await client.is_available()
+                if not available:
+                    await status_msg.edit_text(
+                        "❌ MT5 Bridge offline.\n"
+                        "Kiểm tra Windows: `python mt5_bridge.py`\n"
+                        "Hoặc: `uvicorn mt5_bridge:app --host 127.0.0.1 --port 8710`",
+                        parse_mode="Markdown",
+                    )
+                    return
+
+                # Fetch account + price + positions in parallel
+                results = await asyncio.gather(
+                    client.get_account(),
+                    client.get_tick(__import__("os").environ.get("TRADING_SYMBOL", "XAUUSD")),
+                    client.get_positions(),
+                    return_exceptions=True,
+                )
+                account, tick, positions = results
+
+                lines = ["📊 *MT5 Status*\n"]
+
+                # Account info
+                if isinstance(account, dict):
+                    lines.append(f"💰 Balance: ${account.get('balance', 0):,.2f}")
+                    lines.append(f"📈 Equity: ${account.get('equity', 0):,.2f}")
+                    lines.append(f"📊 Profit: ${account.get('profit', 0):+,.2f}")
+                    lines.append(f"🔒 Margin: ${account.get('margin', 0):,.2f}")
+                    lines.append(f"🆓 Free: ${account.get('margin_free', 0):,.2f}\n")
+
+                # XAUUSD price
+                if isinstance(tick, dict):
+                    spread = tick.get('ask', 0) - tick.get('bid', 0)
+                    lines.append(
+                        f"🥇 XAUUSD: {tick['bid']:.2f} / {tick['ask']:.2f} "
+                        f"(spread: {spread:.2f})\n"
+                    )
+
+                # Quick signal score
+                try:
+                    from src.trading.multi_timeframe import analyze_multi_timeframe
+                    from src.trading.signals import score_signal
+                    multi = await analyze_multi_timeframe(client, __import__("os").environ.get("TRADING_SYMBOL", "XAUUSD"), ["H1", "H4"])
+                    if "error" not in multi:
+                        sig = score_signal(multi)
+                        lines.append(
+                            f"🎯 Signal: {sig['score']}/100 "
+                            f"({sig['recommendation']}) [{sig['confidence']}]\n"
+                        )
+                except Exception:
+                    pass
+
+                # Open positions
+                if isinstance(positions, list) and positions:
+                    total_pnl = sum(p.get("profit", 0) for p in positions)
+                    lines.append(f"📋 Vị thế mở: {len(positions)} | P&L: ${total_pnl:+,.2f}")
+                    for p in positions[:5]:
+                        side = "BUY" if p.get("type", 0) == 0 else "SELL"
+                        lines.append(
+                            f"  • {p.get('symbol', '?')} {side} {p.get('volume', 0)} lot | "
+                            f"${p.get('profit', 0):+,.2f}"
+                        )
+                elif isinstance(positions, list):
+                    lines.append("📋 Không có vị thế mở")
+
+                try:
+                    await status_msg.edit_text("\n".join(lines), parse_mode="Markdown")
+                except Exception:
+                    await status_msg.edit_text("\n".join(lines))
+            finally:
+                await client.close()
+
+        except Exception as e:
+            log.error("mt5_command_error", error=str(e))
+            await status_msg.edit_text(f"❌ MT5 error: {e}")
+
+    async def _handle_trade(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """/trade [subcommand] — Trading Brain management."""
+        if not self._is_authorized(update):
+            return
+
+        if self._trading_brain is None:
+            await update.message.reply_text("❌ Trading Brain chưa được khởi tạo.")
+            return
+
+        text = (update.message.text or "").replace("/trade", "").strip()
+        parts = text.split()
+        subcmd = parts[0] if parts else "status"
+
+        if subcmd == "status":
+            status = self._trading_brain.get_status()
+            running = "🟢 Running" if status["running"] else "🔴 Stopped"
+            msg = (
+                f"🧠 *Trading Brain*\n\n"
+                f"Status: {running}\n"
+                f"Plan: {status['plan']}\n"
+                f"Active Zones: {status['active_zones']}\n"
+                f"Active Positions: {status['active_positions']}\n"
+                f"Pending Orders: {status.get('pending_orders', 0)}\n"
+                f"Trades Taken: {status['trades_taken']}\n"
+            )
+            risk = status.get("risk", {})
+            if risk:
+                state = risk.get("state", {})
+                msg += (
+                    f"\nRisk:\n"
+                    f"  Daily P/L: {state.get('daily_pnl', 0):+.2f}\n"
+                    f"  Daily Trades: {state.get('daily_trades', 0)}\n"
+                    f"  Consecutive Losses: {state.get('consecutive_losses', 0)}\n"
+                )
+            msg += "\nCommands: `start`, `stop`, `plan`, `config`, `pending`, `kill`"
+            await update.message.reply_text(msg, parse_mode="Markdown")
+
+        elif subcmd == "start":
+            if self._trading_brain._running:
+                await update.message.reply_text("⚠️ Trading Brain đang chạy rồi.")
+                return
+            await self._trading_brain.start()
+            await update.message.reply_text("🚀 Trading Brain started! Session scheduler active.")
+
+        elif subcmd == "stop":
+            if not self._trading_brain._running:
+                await update.message.reply_text("⚠️ Trading Brain chưa chạy.")
+                return
+            await self._trading_brain.stop()
+            await update.message.reply_text("🛑 Trading Brain stopped.")
+
+        elif subcmd == "plan":
+            session = parts[1] if len(parts) > 1 else ""
+            msg = await update.message.reply_text("⏳ Đang phân tích thị trường...")
+            try:
+                plan_text = await self._trading_brain.plan_now(session)
+                await msg.edit_text(plan_text)
+            except Exception as e:
+                await msg.edit_text(f"❌ Plan error: {e}")
+
+        elif subcmd == "config":
+            rg = self._trading_brain._risk_guard
+            if rg is None:
+                await update.message.reply_text("❌ RiskGuard not available.")
+                return
+            if len(parts) >= 3:
+                param = parts[1]
+                value = parts[2]
+                try:
+                    if value.lower() in ("true", "false"):
+                        parsed = value.lower() == "true"
+                    elif "." in value:
+                        parsed = float(value)
+                    else:
+                        parsed = int(value)
+                except ValueError:
+                    parsed = value
+                rg.update_config(**{param: parsed})
+                await update.message.reply_text(f"✅ Updated: {param} = {parsed}")
+            else:
+                status = rg.get_status()
+                config = status.get("config", {})
+                lines = ["⚙️ *Risk Config*\n"]
+                for k, v in config.items():
+                    lines.append(f"  `{k}`: {v}")
+                lines.append(f"\nUsage: `/trade config <param> <value>`")
+                await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+        elif subcmd == "pending":
+            sub_action = parts[1] if len(parts) > 1 else "list"
+            pm = self._trading_brain.pending_manager
+            if sub_action == "cancel":
+                count = await pm.cancel_all()
+                await update.message.reply_text(f"🗑 Đã hủy {count} pending order(s).")
+            else:
+                orders = pm.active_orders
+                if not orders:
+                    await update.message.reply_text("📋 Không có pending orders.")
+                else:
+                    lines = [f"📋 *Pending Orders ({len(orders)})*\n"]
+                    for ticket, info in orders.items():
+                        direction = info.get("direction", "?").upper()
+                        order_type = info.get("order_type", "?")
+                        price = info.get("price", 0)
+                        sl = info.get("sl", 0)
+                        tp1 = info.get("tp1", 0)
+                        zone_id = info.get("zone_id", "?")
+                        volume = info.get("volume", 0)
+                        lines.append(
+                            f"`#{ticket}` {direction} {order_type} @ {price:.2f}\n"
+                            f"  Vol: {volume} SL: {sl:.2f} TP: {tp1:.2f}\n"
+                            f"  Zone: {zone_id}"
+                        )
+                    lines.append(f"\nCancel all: `/trade pending cancel`")
+                    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+        elif subcmd == "kill":
+            result = await self._trading_brain.kill()
+            await update.message.reply_text(f"☠️ {result}")
+
+        else:
+            await update.message.reply_text(
+                "Usage: `/trade [status|start|stop|plan|config|pending|kill]`",
+                parse_mode="Markdown",
+            )
 
     async def _handle_digest(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """/digest [topics] — Generate daily news digest on demand."""

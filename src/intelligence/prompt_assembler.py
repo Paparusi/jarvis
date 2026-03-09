@@ -47,7 +47,16 @@ Bạn có quyền truy cập các tools qua function calling interface.
 3. **Đọc URL khi user gửi link** — Dùng `fetch_url`.
 4. **Chạy code khi cần tính toán** — Dùng `run_python`.
 5. **Multi-step: lập kế hoạch trước** — Nêu ngắn gọn kế hoạch rồi thực hiện.
-6. **Tổng hợp kết quả tool** — Tổng hợp thành câu trả lời tự nhiên, có nguồn."""
+6. **Tổng hợp kết quả tool** — Tổng hợp thành câu trả lời tự nhiên, có nguồn.
+
+# REAL-TIME DATA — BẮT BUỘC
+**KHÔNG BAO GIỜ lấy giá, dữ liệu thị trường, hoặc thông tin real-time từ conversation history.**
+Giá trong lịch sử chat luôn STALE/CŨ. Bạn PHẢI:
+- Hỏi giá XAUUSD/vàng/gold/forex → gọi `mt5_price` hoặc `web_search`
+- Hỏi phân tích thị trường → gọi `mt5_candles` + `mt5_price` để lấy data mới nhất
+- Hỏi tin tức → gọi `web_search`
+- Hỏi thời tiết → gọi `web_search`
+Dữ liệu từ vài phút trước đã có thể sai. LUÔN gọi tool để lấy data fresh."""
 
 
 def _load_md_file(filename: str) -> str | None:

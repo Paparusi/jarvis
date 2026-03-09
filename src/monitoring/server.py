@@ -86,13 +86,11 @@ class MetricsServer:
         if self._health_monitor:
             h = self._health_monitor.health
             health.update({
-                "ollama": h.ollama_available,
                 "api_keys": h.api_keys_ok,
                 "disk": h.disk_ok,
                 "db": h.db_ok,
-                "degraded_mode": h.degraded_mode or "none",
             })
-            if h.degraded_mode:
+            if not h.api_keys_ok:
                 health["status"] = "degraded"
 
         return web.json_response(health)

@@ -15,10 +15,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from typing import Any, AsyncIterator
 
-import litellm
+from src.intelligence.claude_client import get_claude_client
 
 from src.gateway.models import AgentResponse, SessionState
 from src.intelligence.prompt_assembler import PromptAssembler
@@ -145,19 +146,21 @@ class AgentLoop:
         assembler: PromptAssembler,
         tracer: ReasoningTracer,
         cloud_model: str = "claude-sonnet-4-20250514",
-        local_model: str = "ollama/qwen3:4b",
         max_iterations: int = 8,
         max_tokens: int = 4096,
         temperature: float = 0.7,
+        **kwargs: Any,
     ) -> None:
         self._tools = tool_registry
         self._assembler = assembler
         self._tracer = tracer
         self._cloud_model = cloud_model
-        self._local_model = local_model
         self._max_iterations = max_iterations
         self._max_tokens = max_tokens
         self._temperature = temperature
+        self._client = get_claude_client()
+        self._tool_result_cache: dict[str, tuple[float, ToolResult]] = {}
+        self._TOOL_CACHE_TTL = 30  # seconds
 
     def _needs_planning(self, text: str) -> bool:
         """Check if query would benefit from a planning step."""
@@ -189,6 +192,40 @@ class AgentLoop:
 
         return messages
 
+    _REALTIME_PATTERN = re.compile(
+        r"(?i)"
+        r"(?:xauusd|gold|vàng|giá vàng|mt5|trading|trade|lệnh|position|pending)"
+        r"|(?:phân tích.*(?:thị trường|market|chart|kỹ thuật|technical))"
+        r"|(?:giá|price|bid|ask|spread|pip)"
+        r"|(?:check.*giá|giá.*hiện|current.*price)"
+    )
+
+    def _inject_realtime_hint(self, messages: list[dict], user_message: str) -> list[dict]:
+        """Force tool use for real-time/trading queries.
+
+        Injects a strong instruction into the last user message so Claude
+        cannot rely on stale prices from conversation history.
+        """
+        if not self._REALTIME_PATTERN.search(user_message):
+            return messages
+
+        hint = (
+            "\n\n[SYSTEM] Dữ liệu giá/thị trường trong lịch sử chat ĐÃ CŨ. "
+            "BẮT BUỘC gọi tool (mt5_price, mt5_candles, web_search) để lấy data mới nhất. "
+            "KHÔNG ĐƯỢC dùng số liệu từ tin nhắn trước."
+        )
+
+        # Append to last user message
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i]["role"] == "user":
+                messages[i] = {
+                    **messages[i],
+                    "content": messages[i]["content"] + hint,
+                }
+                break
+
+        return messages
+
     async def run(
         self,
         session: SessionState,
@@ -213,6 +250,9 @@ class AgentLoop:
 
         # v2: Inject planning hints for complex queries
         messages = self._inject_planning_hint(messages, user_message)
+
+        # v3: Force tool use for real-time/trading queries
+        messages = self._inject_realtime_hint(messages, user_message)
 
         # Get tool schemas if tools enabled
         tools = self._tools.get_schemas() if use_tools and self._tools.get_all() else None
@@ -397,6 +437,9 @@ class AgentLoop:
         # v2: Planning hints for complex queries
         messages = self._inject_planning_hint(messages, user_message)
 
+        # v3: Force tool use for real-time/trading queries
+        messages = self._inject_realtime_hint(messages, user_message)
+
         tools_schema = self._tools.get_schemas() if use_tools and self._tools.get_all() else None
 
         total_tokens_in = 0
@@ -536,13 +579,9 @@ class AgentLoop:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
 
-        if "ollama" in model:
-            kwargs["api_base"] = "http://localhost:11434"
-            kwargs["timeout"] = 60
-
         for attempt in range(_LLM_RETRIES + 1):
             try:
-                return await litellm.acompletion(**kwargs)
+                return await self._client.complete(**kwargs)
             except Exception as e:
                 error_str = str(e).lower()
                 # Don't retry auth errors
@@ -566,6 +605,30 @@ class AgentLoop:
                     return None
         return None
 
+    async def _execute_tool_cached(self, name: str, args: dict) -> ToolResult:
+        """Execute a tool with short-TTL caching to avoid redundant calls."""
+        import hashlib
+        cache_key = f"{name}:{hashlib.md5(json.dumps(args, sort_keys=True).encode()).hexdigest()[:12]}"
+        now = time.time()
+
+        # Check cache
+        if cache_key in self._tool_result_cache:
+            cached_time, cached_result = self._tool_result_cache[cache_key]
+            if now - cached_time < self._TOOL_CACHE_TTL:
+                log.debug("tool_cache_hit", tool=name)
+                return cached_result
+
+        # Execute
+        result = await self._tools.execute(name, **args)
+        self._tool_result_cache[cache_key] = (now, result)
+
+        # Trim cache (max 50 entries)
+        if len(self._tool_result_cache) > 50:
+            oldest_key = min(self._tool_result_cache, key=lambda k: self._tool_result_cache[k][0])
+            del self._tool_result_cache[oldest_key]
+
+        return result
+
     async def _execute_tools_parallel(
         self,
         tool_calls: list,
@@ -585,7 +648,7 @@ class AgentLoop:
 
             log.info("tool_call", tool=tool_name, args=str(tool_args)[:200], iteration=iteration)
 
-            result = await self._tools.execute(tool_name, **tool_args)
+            result = await self._execute_tool_cached(tool_name, tool_args)
 
             tool_calls_made.append({
                 "tool": tool_name,

@@ -155,15 +155,19 @@ class TestSyntheticGeneration:
     @pytest.mark.asyncio
     async def test_generate_category(self, generator):
         """Should call LLM and parse response."""
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = json.dumps([
-            {"user": "Hello", "assistant": "Hi there! How can I help?"},
-        ])
+        from src.intelligence.llm_models import LLMResponse, Choice, Message
+        mock_response = LLMResponse(
+            choices=[Choice(message=Message(content=json.dumps([
+                {"user": "Hello", "assistant": "Hi there! How can I help?"},
+            ])))],
+        )
 
         cat = {"category": "test", "instruction": "Generate test data", "count": 1}
 
-        with patch("litellm.acompletion", new_callable=AsyncMock, return_value=mock_response):
+        with patch("src.intelligence.claude_client.get_claude_client") as mock_get_client:
+            mock_client = AsyncMock()
+            mock_client.complete = AsyncMock(return_value=mock_response)
+            mock_get_client.return_value = mock_client
             result = await generator._generate_category(cat, "{instruction}")
 
         assert len(result) == 1
@@ -174,7 +178,10 @@ class TestSyntheticGeneration:
         """Should return empty list on error."""
         cat = {"category": "test", "instruction": "Test", "count": 1}
 
-        with patch("litellm.acompletion", new_callable=AsyncMock, side_effect=RuntimeError("API error")):
+        with patch("src.intelligence.claude_client.get_claude_client") as mock_get_client:
+            mock_client = AsyncMock()
+            mock_client.complete = AsyncMock(side_effect=RuntimeError("API error"))
+            mock_get_client.return_value = mock_client
             result = await generator._generate_category(cat, "{instruction}")
 
         assert result == []
@@ -182,17 +189,21 @@ class TestSyntheticGeneration:
     @pytest.mark.asyncio
     async def test_generate_sft(self, generator, tmp_project):
         """Should generate and save SFT data."""
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = json.dumps([
-            {"user": "Test question", "assistant": "Test answer with enough content for validation"},
-        ])
+        from src.intelligence.llm_models import LLMResponse, Choice, Message
+        mock_response = LLMResponse(
+            choices=[Choice(message=Message(content=json.dumps([
+                {"user": "Test question", "assistant": "Test answer with enough content for validation"},
+            ])))],
+        )
 
         small_cats = [
             {"category": "test_cat", "instruction": "Generate data", "count": 1},
         ]
 
-        with patch("litellm.acompletion", new_callable=AsyncMock, return_value=mock_response):
+        with patch("src.intelligence.claude_client.get_claude_client") as mock_get_client:
+            mock_client = AsyncMock()
+            mock_client.complete = AsyncMock(return_value=mock_response)
+            mock_get_client.return_value = mock_client
             result = await generator.generate_sft(categories=small_cats)
 
         assert result["total_records"] >= 1
@@ -203,17 +214,21 @@ class TestSyntheticGeneration:
     @pytest.mark.asyncio
     async def test_generate_dpo(self, generator, tmp_project):
         """Should generate DPO pairs."""
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = json.dumps([
-            {"prompt": "Q1", "chosen": "Good answer", "rejected": "Bad answer"},
-        ])
+        from src.intelligence.llm_models import LLMResponse, Choice, Message
+        mock_response = LLMResponse(
+            choices=[Choice(message=Message(content=json.dumps([
+                {"prompt": "Q1", "chosen": "Good answer", "rejected": "Bad answer"},
+            ])))],
+        )
 
         small_cats = [
             {"category": "dpo_test", "instruction": "Generate DPO", "count": 1},
         ]
 
-        with patch("litellm.acompletion", new_callable=AsyncMock, return_value=mock_response):
+        with patch("src.intelligence.claude_client.get_claude_client") as mock_get_client:
+            mock_client = AsyncMock()
+            mock_client.complete = AsyncMock(return_value=mock_response)
+            mock_get_client.return_value = mock_client
             result = await generator.generate_dpo(categories=small_cats)
 
         assert result["total_pairs"] >= 1
@@ -334,17 +349,18 @@ class TestEvalBenchmark:
     @pytest.mark.asyncio
     async def test_run_benchmark_skip_cloud(self, evaluator, tmp_project):
         """Should run benchmark with local model only."""
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = "Thủ đô Việt Nam là Hà Nội, một thành phố lớn."
-        mock_response.usage = MagicMock(prompt_tokens=10, completion_tokens=20)
+        from src.intelligence.llm_models import LLMResponse, Choice, Message, Usage
+        mock_response = LLMResponse(
+            choices=[Choice(message=Message(content="Thủ đô Việt Nam là Hà Nội, một thành phố lớn."))],
+            usage=Usage(prompt_tokens=10, completion_tokens=20),
+        )
 
         # Judge response
-        judge_response = MagicMock()
-        judge_response.choices = [MagicMock()]
-        judge_response.choices[0].message.content = json.dumps({
-            "local_score": 7.5, "reasoning": "Good answer"
-        })
+        judge_response = LLMResponse(
+            choices=[Choice(message=Message(content=json.dumps({
+                "local_score": 7.5, "reasoning": "Good answer"
+            })))],
+        )
 
         small_cats = {"factual_vn": ["Thủ đô Việt Nam là gì?"]}
 
@@ -356,7 +372,10 @@ class TestEvalBenchmark:
                 return mock_response  # local model
             return judge_response  # judge
 
-        with patch("litellm.acompletion", new_callable=AsyncMock, side_effect=mock_completion):
+        with patch("src.intelligence.claude_client.get_claude_client") as mock_get_client:
+            mock_client = AsyncMock()
+            mock_client.complete = AsyncMock(side_effect=mock_completion)
+            mock_get_client.return_value = mock_client
             report = await evaluator.run_benchmark(
                 categories=small_cats, skip_cloud=True,
             )
@@ -488,12 +507,13 @@ class TestBrainMetrics:
 
 class TestRouterConfig:
 
-    def test_config_has_local_enabled(self):
+    def test_config_has_router_enabled(self):
         from src.utils.config import load_config
         config = load_config()
         router = config.get("intelligence", {}).get("router", {})
         assert router.get("enabled") is True
-        assert "local_model" in router
+        # 2-tier: cache → cloud (no local models)
+        assert "cache" in router
 
     def test_config_has_cache(self):
         from src.utils.config import load_config

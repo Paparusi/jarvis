@@ -1,7 +1,7 @@
 # USER — Digital Twin Profile
 
 > Auto-generated & continuously updated by JARVIS Digital Twin Engine.
-> Last updated: 2026-03-06
+> Last updated: 2026-03-09
 
 ---
 
@@ -39,19 +39,20 @@
 - **Software Engineering**: Full-stack development, system architecture
 - **AI/ML**: LLM fine-tuning, training pipelines, model deployment
 - **DevOps**: Docker, Linux, CI/CD, server administration
-- **Security**: Penetration testing, vulnerability assessment
-- **Trading**: Technical analysis (XAUUSD, crypto)
+- **Security**: Penetration testing, vulnerability assessment, bug bounty
+- **Trading**: Technical analysis (XAUUSD, crypto), MT5
 
-### Current Focus
-- Xây dựng JARVIS — hệ thống AI agent tự tiến hóa
-- Brain Independence — huấn luyện local model thay thế cloud API
-- Nghiên cứu AI agents, MCP, tool-use patterns
+### Current Focus (March 2026)
+- JARVIS agent — finance pivot: XAUUSD trading, crypto airdrops, news engine
+- Trading Brain autonomous trading via MT5
+- Cloud-first approach: Claude API trực tiếp, không local models
 
 ### Topics of Interest
 - AI/ML advancements, LLM research
-- Trading & technical analysis
+- Trading & technical analysis (XAUUSD, gold)
 - System architecture & design patterns
-- Security & hacking
+- Security & hacking, bug bounty
+- Cryptocurrency & DeFi
 - Vietnamese tech ecosystem
 
 ---
@@ -72,6 +73,7 @@
 - Quyết đoán — ít do dự, chọn option nhanh
 - Tin tưởng technical judgment của JARVIS (CTO role)
 - Ưu tiên practical over perfect
+- Sẵn sàng pivot khi cần (Security → Finance)
 
 ---
 
@@ -89,6 +91,11 @@
 - Comments: Chỉ cho logic phức tạp
 - Testing: Comprehensive unit tests
 
+### Strategic Decisions
+- **Không dùng local models** — chấp nhận chi phí cloud (Claude API)
+- **Finance focus**: Trading XAUUSD, crypto tools, news engine
+- **Cloud-first**: Anthropic SDK trực tiếp, OAuth token
+
 ---
 
 ## Relationship with JARVIS
@@ -96,13 +103,14 @@
 Bi coi JARVIS như:
 - **CTO/Technical Partner**: Tin tưởng technical decisions
 - **Personal Assistant**: Quản lý tasks, reminders, research
+- **Trading Partner**: Autonomous XAUUSD trading assistant
 - **Learning Companion**: Cùng nhau xây dựng và học hỏi
 
 Kỳ vọng:
-- JARVIS ngày càng thông minh, ít phụ thuộc cloud
-- Xử lý 90%+ requests locally trong 6 tháng
-- Tự cải thiện liên tục mà không cần can thiệp
+- JARVIS tự cải thiện liên tục qua Dreamtime
+- Trading Brain profitable và autonomous
 - An toàn, trung thực, không bao giờ bịa
+- Mở rộng sang crypto tools và news engine
 
 ---
 
