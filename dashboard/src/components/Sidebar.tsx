@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  LayoutDashboard, MessageSquare, TrendingUp,
+  LayoutDashboard, MessageSquare, TrendingUp, Building2,
   Brain, Target, HeartPulse, Settings,
 } from "lucide-react";
 
@@ -11,6 +11,7 @@ const NAV_ITEMS = [
   { href: "/", label: "Overview", icon: LayoutDashboard },
   { href: "/chat", label: "Chat", icon: MessageSquare },
   { href: "/trading", label: "Trading", icon: TrendingUp },
+  { href: "/company", label: "Company", icon: Building2 },
   { href: "/memory", label: "Memory", icon: Brain },
   { href: "/skills", label: "Skills", icon: Target },
   { href: "/health", label: "Health", icon: HeartPulse },

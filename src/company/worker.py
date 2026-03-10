@@ -9,6 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 from src.company.worker_store import MetricsStore, TaskStore, WorkerMemoryStore
+from src.gateway.event_bus import get_event_bus
 from src.gateway.models import AgentResponse, Channel, SessionState
 from src.intelligence.agent_loop import AgentLoop
 from src.intelligence.prompt_assembler import PromptAssembler
@@ -151,6 +152,20 @@ class Worker:
         start_time = time.monotonic()
 
         try:
+            bus = get_event_bus()
+            asyncio.create_task(bus.publish(
+                "company_worker_busy",
+                {
+                    "worker_id": self.worker_id,
+                    "worker_name": self.name,
+                    "department": self.department,
+                },
+                source=self.worker_id,
+            ))
+        except Exception:
+            pass
+
+        try:
             session = SessionState(
                 session_id=session_id,
                 channel=Channel.CLI,
@@ -190,6 +205,22 @@ class Worker:
                 latency_ms=elapsed_ms,
             )
 
+            try:
+                bus = get_event_bus()
+                asyncio.create_task(bus.publish(
+                    "company_worker_done",
+                    {
+                        "worker_id": self.worker_id,
+                        "worker_name": self.name,
+                        "department": self.department,
+                        "duration_ms": elapsed_ms,
+                        "result_preview": response.content[:100],
+                    },
+                    source=self.worker_id,
+                ))
+            except Exception:
+                pass
+
         except asyncio.TimeoutError:
             elapsed_ms = int((time.monotonic() - start_time) * 1000)
             self._task_store.fail_task(task_id, "Task timed out")
@@ -205,6 +236,20 @@ class Worker:
                 task_id=task_id,
                 timeout=self._task_timeout,
             )
+            try:
+                bus = get_event_bus()
+                asyncio.create_task(bus.publish(
+                    "company_worker_fail",
+                    {
+                        "worker_id": self.worker_id,
+                        "worker_name": self.name,
+                        "department": self.department,
+                        "error": "Task timed out",
+                    },
+                    source=self.worker_id,
+                ))
+            except Exception:
+                pass
 
         except Exception as exc:
             elapsed_ms = int((time.monotonic() - start_time) * 1000)
@@ -221,6 +266,20 @@ class Worker:
                 task_id=task_id,
                 error=str(exc),
             )
+            try:
+                bus = get_event_bus()
+                asyncio.create_task(bus.publish(
+                    "company_worker_fail",
+                    {
+                        "worker_id": self.worker_id,
+                        "worker_name": self.name,
+                        "department": self.department,
+                        "error": str(exc)[:200],
+                    },
+                    source=self.worker_id,
+                ))
+            except Exception:
+                pass
 
         finally:
             self.status = WorkerStatus.IDLE
@@ -312,6 +371,20 @@ class Worker:
         start_time = time.monotonic()
 
         try:
+            bus = get_event_bus()
+            asyncio.create_task(bus.publish(
+                "company_worker_busy",
+                {
+                    "worker_id": self.worker_id,
+                    "worker_name": self.name,
+                    "department": self.department,
+                },
+                source=self.worker_id,
+            ))
+        except Exception:
+            pass
+
+        try:
             session = SessionState(
                 session_id=sid,
                 channel=Channel.CLI,
@@ -344,6 +417,22 @@ class Worker:
                 success=True,
             )
 
+            try:
+                bus = get_event_bus()
+                asyncio.create_task(bus.publish(
+                    "company_worker_done",
+                    {
+                        "worker_id": self.worker_id,
+                        "worker_name": self.name,
+                        "department": self.department,
+                        "duration_ms": elapsed_ms,
+                        "result_preview": response.content[:100],
+                    },
+                    source=self.worker_id,
+                ))
+            except Exception:
+                pass
+
             return response
 
         except Exception as exc:
@@ -359,6 +448,21 @@ class Worker:
                 worker_id=self.worker_id,
                 error=str(exc),
             )
+            try:
+                bus = get_event_bus()
+                asyncio.create_task(bus.publish(
+                    "company_worker_fail",
+                    {
+                        "worker_id": self.worker_id,
+                        "worker_name": self.name,
+                        "department": self.department,
+                        "error": str(exc)[:200],
+                    },
+                    source=self.worker_id,
+                ))
+            except Exception:
+                pass
+
             raise
 
         finally:

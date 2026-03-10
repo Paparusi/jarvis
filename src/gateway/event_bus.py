@@ -53,6 +53,14 @@ class EventType(str, Enum):
     AGENT_STARTED = "agent_started"
     AGENT_COMPLETED = "agent_completed"
 
+    # Company events
+    COMPANY_CEO_ROUTE = "company_ceo_route"
+    COMPANY_DEPT_ASSIGN = "company_dept_assign"
+    COMPANY_DEPT_DIRECT = "company_dept_direct"
+    COMPANY_WORKER_BUSY = "company_worker_busy"
+    COMPANY_WORKER_DONE = "company_worker_done"
+    COMPANY_WORKER_FAIL = "company_worker_fail"
+
     # System events
     ERROR = "error"
     STARTUP = "startup"

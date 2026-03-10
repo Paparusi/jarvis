@@ -8,12 +8,15 @@ Each department head:
 
 from __future__ import annotations
 
+import asyncio
+
 from src.company.departments import (
     Department,
     get_department_display_name,
     get_department_tools,
 )
 from src.company.worker import Worker
+from src.gateway.event_bus import get_event_bus
 from src.gateway.models import AgentResponse, SessionState
 from src.intelligence.agent_loop import AgentLoop
 from src.intelligence.prompt_assembler import PromptAssembler
@@ -143,6 +146,21 @@ class DepartmentHead:
                 dept=self.dept.value,
                 worker=worker.worker_id,
             )
+            try:
+                bus = get_event_bus()
+                asyncio.create_task(bus.publish(
+                    "company_dept_assign",
+                    {
+                        "department": self.dept.value,
+                        "worker_id": worker.worker_id,
+                        "worker_name": worker.name,
+                        "instruction": message[:100],
+                    },
+                    source=f"dept_{self.dept.value}",
+                ))
+            except Exception:
+                pass
+
             result = await worker.execute_direct(
                 instruction=message,
                 session_id=session.session_id,
@@ -152,6 +170,19 @@ class DepartmentHead:
             return result
 
         # Fallback: handle directly (existing behavior)
+        try:
+            bus = get_event_bus()
+            asyncio.create_task(bus.publish(
+                "company_dept_direct",
+                {
+                    "department": self.dept.value,
+                    "reason": "no_idle_workers",
+                },
+                source=f"dept_{self.dept.value}",
+            ))
+        except Exception:
+            pass
+
         dept_context = self._dept_prompt
         if skill_context:
             dept_context = f"{dept_context}\n\n{skill_context}"

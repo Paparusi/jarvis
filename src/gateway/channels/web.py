@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ from src.brain.processor import DataProcessor
 from src.digital_twin.user_model import UserModel
 from src.gateway.event_bus import get_event_bus
 from src.gateway.models import AgentResponse, Channel, MessageEnvelope
+from src.gateway.ws_hub import get_ws_hub
 from src.gateway.session import SessionManager
 from src.intelligence.router import LLMRouter
 from src.memory.manager import MemoryManager
@@ -55,81 +57,75 @@ def create_app(app: JarvisApp | None = None) -> FastAPI:
 
     adapter = WebAdapter(app)
 
-    # Track connected trading WS clients
-    trading_ws_clients: list = []
+    # --- Unified WebSocket ---
+    hub = get_ws_hub()
 
-    async def _push_trading_ws(event: dict):
-        """Broadcast event to all connected trading WebSocket clients."""
-        dead = []
-        for ws in trading_ws_clients:
-            try:
-                await ws.send_json(event)
-            except Exception:
-                dead.append(ws)
-        for ws in dead:
-            if ws in trading_ws_clients:
-                trading_ws_clients.remove(ws)
-
-    # --- WebSocket chat ---
-    @fastapi_app.websocket("/ws/chat")
-    async def websocket_chat(ws: WebSocket):
+    @fastapi_app.websocket("/ws")
+    async def websocket_unified(ws: WebSocket):
         await ws.accept()
-        session_id = None
+        hub.connect(ws)
         try:
             while True:
-                data = await ws.receive_json()
-                msg_type = data.get("type", "message")
+                raw = await ws.receive_json()
 
+                # Handle hub protocol (subscribe/unsubscribe/ping)
+                response = await hub.handle_client_message(ws, raw)
+                if response:
+                    await ws.send_json(response)
+
+                # Handle chat messages (backward compat with /ws/chat)
+                msg_type = raw.get("type")
                 if msg_type == "message":
-                    text = data.get("text", "").strip()
-                    if not text:
-                        continue
-
-                    session_id = data.get("session_id", session_id)
-
-                    # Stream response back
-                    async for event in adapter.handle_message_stream(text, session_id):
-                        await ws.send_json(event)
+                    text = raw.get("text", "").strip()
+                    if text:
+                        session_id = raw.get("session_id")
+                        async for event in adapter.handle_message_stream(text, session_id):
+                            await ws.send_json({"channel": "chat", **event})
 
                 elif msg_type == "feedback":
-                    rating = data.get("rating", "")
-                    message_id = data.get("message_id", "")
+                    rating = raw.get("rating", "")
+                    message_id = raw.get("message_id", "")
                     if rating and message_id:
                         adapter.handle_feedback(message_id, rating)
 
                 elif msg_type == "command":
-                    cmd = data.get("command", "")
+                    cmd = raw.get("command", "")
                     result = await adapter.handle_command(cmd)
-                    await ws.send_json({"type": "command_result", "data": result})
+                    await ws.send_json({"channel": "chat", "type": "command_result", "data": result})
 
         except WebSocketDisconnect:
-            log.info("ws_disconnected", session=session_id)
+            log.info("ws_disconnected")
         except Exception as e:
             log.error("ws_error", error=str(e))
-            try:
-                await ws.send_json({"type": "error", "text": str(e)})
-            except Exception:
-                pass
-
-    # --- WebSocket trading ---
-    @fastapi_app.websocket("/ws/trading")
-    async def websocket_trading(websocket: WebSocket):
-        await websocket.accept()
-        trading_ws_clients.append(websocket)
-        log.info("trading_ws_connected")
-        try:
-            while True:
-                data = await websocket.receive_json()
-                if data.get("type") == "ping":
-                    await websocket.send_json({"type": "pong"})
-        except Exception:
-            pass
         finally:
-            if websocket in trading_ws_clients:
-                trading_ws_clients.remove(websocket)
-            log.info("trading_ws_disconnected")
+            hub.disconnect(ws)
 
-    # Wire WS push callback to approval_manager if trading brain is available
+    # Bridge EventBus -> WebSocketHub for company events
+    async def _bridge_company_event(event):
+        """Forward company EventBus events to WS company channel."""
+        mapping = {
+            "company_ceo_route": "ceo_route",
+            "company_dept_assign": "dept_assign",
+            "company_dept_direct": "dept_direct",
+            "company_worker_busy": "worker_start",
+            "company_worker_done": "worker_done",
+            "company_worker_fail": "worker_fail",
+        }
+        ws_event = mapping.get(event.type)
+        if ws_event:
+            await hub.broadcast("company", ws_event, event.data)
+
+    event_bus = get_event_bus()
+    for evt_type in [
+        "company_ceo_route", "company_dept_assign", "company_dept_direct",
+        "company_worker_busy", "company_worker_done", "company_worker_fail",
+    ]:
+        event_bus.subscribe(evt_type, _bridge_company_event)
+
+    # Wire trading approval events through hub
+    async def _push_trading_ws(event: dict):
+        await hub.broadcast("trading", event.get("event", "update"), event)
+
     if (adapter._app
             and getattr(adapter._app, 'trading_brain', None)
             and hasattr(adapter._app.trading_brain, 'approval_manager')):
@@ -222,6 +218,29 @@ def create_app(app: JarvisApp | None = None) -> FastAPI:
             return JSONResponse({"candles": candles})
         except Exception as e:
             return JSONResponse({"candles": [], "error": str(e)})
+
+    # --- Company API ---
+    @fastapi_app.get("/api/company/status")
+    async def api_company_status():
+        if not adapter._app or not adapter._app._ceo:
+            return JSONResponse({"error": "Company not initialized"})
+        return JSONResponse(adapter._app._ceo.get_status())
+
+    @fastapi_app.get("/api/company/activity")
+    async def api_company_activity(limit: int = Query(50)):
+        bus = get_event_bus()
+        events = bus.get_recent_events(limit=limit)
+        company_events = [
+            {
+                "type": e.type,
+                "data": e.data,
+                "source": e.source,
+                "ts": datetime.fromtimestamp(e.timestamp, tz=timezone.utc).isoformat(),
+            }
+            for e in events
+            if e.type.startswith("company_")
+        ]
+        return JSONResponse({"events": company_events[-limit:]})
 
     # --- Memory, Activity, System API ---
     @fastapi_app.get("/api/memory/search")

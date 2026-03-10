@@ -8,6 +8,7 @@ The CEO is the smart router that:
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from src.company.department_head import DepartmentHead
@@ -17,6 +18,7 @@ from src.company.departments import (
     get_department_display_name,
 )
 from src.company.worker_registry import WorkerRegistry
+from src.gateway.event_bus import get_event_bus
 from src.gateway.models import AgentResponse, SessionState
 from src.intelligence.agent_loop import AgentLoop
 from src.intelligence.prompt_assembler import PromptAssembler
@@ -87,6 +89,21 @@ class CEO:
         dept = classify_department(message)
 
         log.info("ceo_classify", dept=dept.value, message=message[:80])
+
+        # Emit routing event (fire-and-forget)
+        try:
+            bus = get_event_bus()
+            asyncio.create_task(bus.publish(
+                "company_ceo_route",
+                {
+                    "message": message[:100],
+                    "department": dept.value,
+                    "session_id": getattr(session, "session_id", ""),
+                },
+                source="ceo",
+            ))
+        except Exception:
+            pass
 
         # GENERAL → handle directly (same as before, all tools)
         if dept == Department.GENERAL:
