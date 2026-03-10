@@ -1,33 +1,30 @@
 ---
-name: tong-thong-hien
+name: dang-model-nao
 description: >
   Tự động phát hiện từ 4 interactions tương tự.
-  Kích hoạt khi user hỏi về chủ đề liên quan đến tong thong hien.
+  Kích hoạt khi user hỏi về chủ đề liên quan đến dang model nao.
 version: 1.0.0
 metadata:
   jarvis:
     category: auto-generated
     auto_generated: true
     created_by: dreamtime
-    success_rate: 0.89
+    success_rate: 0.84
     usage_count: 4
     priority: 0.6
-    mcp_tools: ["web_search"]
+    mcp_tools: []
 ---
 
-# Tong Thong Hien
+# Dang Model Nao
 
 ## Khi nào kích hoạt
-Khi user hỏi về tong thong hien hoặc các chủ đề liên quan.
+Khi user hỏi về dang model nao hoặc các chủ đề liên quan.
 Skill này được tự động tạo từ 4 interactions thành công.
 
-## Tools
-Sử dụng: web_search
-
 ## Ví dụ trigger
-- "Tong thong My hien tai la ai?"
-- "Tong thong My hien tai la ai?"
-- "Tong thong My hien tai la ai?"
+- "ê giờ mày đang chạy model nào vậy?"
+- "bạn đang dùng model nào"
+- "m đang dùng model nào vậy"
 
 ## Workflow
 1. Phân tích yêu cầu user
@@ -38,8 +35,3 @@ Sử dụng: web_search
 - Trả lời chính xác theo yêu cầu
 - Sử dụng tools khi cần thiết
 - Nếu không chắc chắn → hỏi lại user
-
-
-## Merged From: hien-tai-gia
-- Original description: Tự động phát hiện từ 3 interactions tương tự. Kích hoạt khi user hỏi về chủ đề liên quan đến hien tai gia.
-- Merged on: 2026-03-09

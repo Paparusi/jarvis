@@ -1,33 +1,33 @@
 ---
-name: tong-thong-hien
+name: jarvis-xem-nao
 description: >
   Tự động phát hiện từ 4 interactions tương tự.
-  Kích hoạt khi user hỏi về chủ đề liên quan đến tong thong hien.
+  Kích hoạt khi user hỏi về chủ đề liên quan đến jarvis xem nao.
 version: 1.0.0
 metadata:
   jarvis:
     category: auto-generated
     auto_generated: true
     created_by: dreamtime
-    success_rate: 0.89
+    success_rate: 0.87
     usage_count: 4
     priority: 0.6
-    mcp_tools: ["web_search"]
+    mcp_tools: ["mt5_price", "market_session", "mt5_candles"]
 ---
 
-# Tong Thong Hien
+# Jarvis Xem Nao
 
 ## Khi nào kích hoạt
-Khi user hỏi về tong thong hien hoặc các chủ đề liên quan.
+Khi user hỏi về jarvis xem nao hoặc các chủ đề liên quan.
 Skill này được tự động tạo từ 4 interactions thành công.
 
 ## Tools
-Sử dụng: web_search
+Sử dụng: mt5_price, market_session, mt5_candles
 
 ## Ví dụ trigger
-- "Tong thong My hien tai la ai?"
-- "Tong thong My hien tai la ai?"
-- "Tong thong My hien tai la ai?"
+- "e jarvis"
+- "ê jarvis"
+- "jarvis"
 
 ## Workflow
 1. Phân tích yêu cầu user
@@ -38,8 +38,3 @@ Sử dụng: web_search
 - Trả lời chính xác theo yêu cầu
 - Sử dụng tools khi cần thiết
 - Nếu không chắc chắn → hỏi lại user
-
-
-## Merged From: hien-tai-gia
-- Original description: Tự động phát hiện từ 3 interactions tương tự. Kích hoạt khi user hỏi về chủ đề liên quan đến hien tai gia.
-- Merged on: 2026-03-09
