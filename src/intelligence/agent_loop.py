@@ -234,8 +234,14 @@ class AgentLoop:
         skill_context: str = "",
         use_tools: bool = True,
         model: str | None = None,
+        tool_filter: set[str] | None = None,
     ) -> AgentResponse:
-        """Run the agent loop."""
+        """Run the agent loop.
+
+        Args:
+            tool_filter: If set, only these tool names are visible to the LLM.
+                         Used by Department Heads to limit tools to their domain.
+        """
         start_time = time.monotonic()
         model = model or self._cloud_model
         trace = self._tracer.start_trace(session.session_id, user_message)
@@ -254,8 +260,14 @@ class AgentLoop:
         # v3: Force tool use for real-time/trading queries
         messages = self._inject_realtime_hint(messages, user_message)
 
-        # Get tool schemas if tools enabled
-        tools = self._tools.get_schemas() if use_tools and self._tools.get_all() else None
+        # Get tool schemas — optionally filtered by department
+        if use_tools and self._tools.get_all():
+            if tool_filter:
+                tools = self._tools.get_filtered_schemas(tool_filter)
+            else:
+                tools = self._tools.get_schemas()
+        else:
+            tools = None
 
         total_tokens_in = 0
         total_tokens_out = 0
@@ -414,6 +426,7 @@ class AgentLoop:
         skill_context: str = "",
         use_tools: bool = True,
         model: str | None = None,
+        tool_filter: set[str] | None = None,
     ) -> AsyncIterator[StreamEvent]:
         """Run agent loop with streaming — yields StreamEvents for progressive UI.
 
@@ -440,7 +453,14 @@ class AgentLoop:
         # v3: Force tool use for real-time/trading queries
         messages = self._inject_realtime_hint(messages, user_message)
 
-        tools_schema = self._tools.get_schemas() if use_tools and self._tools.get_all() else None
+        # Get tool schemas — optionally filtered by department
+        if use_tools and self._tools.get_all():
+            if tool_filter:
+                tools_schema = self._tools.get_filtered_schemas(tool_filter)
+            else:
+                tools_schema = self._tools.get_schemas()
+        else:
+            tools_schema = None
 
         total_tokens_in = 0
         total_tokens_out = 0

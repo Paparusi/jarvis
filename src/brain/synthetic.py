@@ -375,8 +375,6 @@ class SyntheticDataGenerator:
 
         Returns stats dict with counts per category.
         """
-        import litellm
-
         cats = categories or CATEGORIES
         all_records: list[dict] = []
         stats: dict[str, int] = {}
@@ -469,8 +467,6 @@ class SyntheticDataGenerator:
         max_records: int = 50,
     ) -> dict[str, Any]:
         """Generate paraphrased versions of existing training data."""
-        import litellm
-
         src = source_file or (self._output_dir / "combined_sft.jsonl")
         if not src.exists():
             return {"total": 0, "error": "Source file not found"}
@@ -512,9 +508,11 @@ class SyntheticDataGenerator:
             )
 
             try:
-                resp = await litellm.acompletion(
-                    model=self._model,
+                from src.intelligence.claude_client import get_claude_client
+                client = get_claude_client()
+                resp = await client.complete(
                     messages=[{"role": "user", "content": prompt}],
+                    model=self._model,
                     max_tokens=4096,
                     temperature=self._temperature,
                 )
@@ -620,14 +618,15 @@ class SyntheticDataGenerator:
         prompt_template: str,
     ) -> list[dict]:
         """Generate data for a single category via LLM."""
-        import litellm
+        from src.intelligence.claude_client import get_claude_client
 
         prompt = prompt_template.format(instruction=cat["instruction"])
 
         try:
-            resp = await litellm.acompletion(
-                model=self._model,
+            client = get_claude_client()
+            resp = await client.complete(
                 messages=[{"role": "user", "content": prompt}],
+                model=self._model,
                 max_tokens=4096,
                 temperature=self._temperature,
             )

@@ -20,9 +20,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
-import litellm
-
-litellm.suppress_debug_info = True
+# Add parent to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from src.intelligence.claude_client import get_claude_client
 
 SYSTEM_PROMPT = "Bạn là JARVIS — trợ lý AI cá nhân thông minh."
 
@@ -102,8 +102,8 @@ async def generate_category(category: dict) -> list[dict]:
     prompt = GENERATION_PROMPT.format(instruction=category["instruction"])
 
     try:
-        response = await litellm.acompletion(
-            model="claude-sonnet-4-20250514",
+        client = get_claude_client()
+        response = await client.complete(
             messages=[{"role": "user", "content": prompt}],
             max_tokens=4096,
             temperature=0.8,

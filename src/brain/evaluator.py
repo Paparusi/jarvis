@@ -152,8 +152,9 @@ class ModelEvaluator:
         Returns:
             BenchmarkReport with scores and comparison.
         """
-        import litellm
+        from src.intelligence.claude_client import get_claude_client
 
+        client = get_claude_client()
         cats = categories or EVAL_CATEGORIES
         report = BenchmarkReport(
             timestamp=datetime.now(timezone.utc).isoformat(),
@@ -169,12 +170,12 @@ class ModelEvaluator:
                 # Get local response
                 try:
                     t0 = time.monotonic()
-                    local_resp = await litellm.acompletion(
-                        model=self._local_model,
+                    local_resp = await client.complete(
                         messages=[
                             {"role": "system", "content": "Bạn là JARVIS — trợ lý AI cá nhân thông minh."},
                             {"role": "user", "content": prompt},
                         ],
+                        model=self._local_model,
                         max_tokens=1024,
                         temperature=0.3,
                     )
@@ -188,12 +189,12 @@ class ModelEvaluator:
                 if not skip_cloud:
                     try:
                         t0 = time.monotonic()
-                        cloud_resp = await litellm.acompletion(
-                            model=self._cloud_model,
+                        cloud_resp = await client.complete(
                             messages=[
                                 {"role": "system", "content": "Bạn là JARVIS — trợ lý AI cá nhân thông minh."},
                                 {"role": "user", "content": prompt},
                             ],
+                            model=self._cloud_model,
                             max_tokens=1024,
                             temperature=0.3,
                         )
@@ -226,7 +227,9 @@ class ModelEvaluator:
 
     async def _judge_results(self, results: list[EvalResult]) -> None:
         """Use LLM-as-judge to score responses."""
-        import litellm
+        from src.intelligence.claude_client import get_claude_client
+
+        client = get_claude_client()
 
         for result in results:
             if result.local_response.startswith("[Error"):
@@ -238,9 +241,9 @@ class ModelEvaluator:
             judge_prompt = self._build_judge_prompt(result)
 
             try:
-                resp = await litellm.acompletion(
-                    model=self._judge_model,
+                resp = await client.complete(
                     messages=[{"role": "user", "content": judge_prompt}],
+                    model=self._judge_model,
                     max_tokens=512,
                     temperature=0.1,
                 )

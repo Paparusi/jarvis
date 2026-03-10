@@ -1,19 +1,16 @@
-"""LLM integration via LiteLLM — Claude API with memory-augmented context."""
+"""LLM integration via Claude API with memory-augmented context."""
 
 from __future__ import annotations
 
 import time
 from typing import Any
 
-import litellm
-
 from src.gateway.models import AgentResponse, SessionState
+from src.intelligence.claude_client import get_claude_client
 from src.utils.config import load_config
 from src.utils.logging import get_logger
 
 log = get_logger("llm")
-
-litellm.suppress_debug_info = True
 
 SYSTEM_PROMPT = """Bạn là JARVIS — trợ lý AI cá nhân thông minh, trung thực, và hữu ích.
 
@@ -61,9 +58,10 @@ async def chat_completion(
     start_time = time.monotonic()
 
     try:
-        response = await litellm.acompletion(
-            model=model,
+        client = get_claude_client()
+        response = await client.complete(
             messages=messages,
+            model=model,
             max_tokens=max_tokens,
             temperature=temperature,
         )
@@ -80,8 +78,7 @@ async def chat_completion(
             tokens_in=usage.prompt_tokens if usage else 0,
             tokens_out=usage.completion_tokens if usage else 0,
             latency_ms=elapsed_ms,
-            cost_usd=response._hidden_params.get("response_cost", 0.0)
-            if hasattr(response, "_hidden_params") else 0.0,
+            cost_usd=0.0,
         )
 
         log.info(

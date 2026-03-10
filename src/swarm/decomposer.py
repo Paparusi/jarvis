@@ -14,8 +14,7 @@ import json
 from dataclasses import dataclass, field
 from enum import Enum
 
-import litellm
-
+from src.intelligence.claude_client import get_claude_client
 from src.utils.logging import get_logger
 
 log = get_logger("swarm.decomposer")
@@ -169,12 +168,13 @@ class TaskDecomposer:
 
     async def _llm_decompose(self, user_message: str) -> TaskPlan:
         """Use LLM to decompose a complex request."""
-        response = await litellm.acompletion(
-            model=self._model,
+        client = get_claude_client()
+        response = await client.complete(
             messages=[
                 {"role": "system", "content": _DECOMPOSE_PROMPT},
                 {"role": "user", "content": user_message},
             ],
+            model=self._model,
             max_tokens=1024,
             temperature=0.3,
             response_format={"type": "json_object"},

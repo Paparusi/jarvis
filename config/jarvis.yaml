@@ -18,11 +18,9 @@ intelligence:
   max_tokens: 4096
   temperature: 0.7
 
-  # LLM Router — 3-tier: cache → local → cloud
+  # LLM Router — 2-tier: cache → cloud (Claude API direct)
   router:
-    enabled: true                # Enabled — local-first, cloud fallback
-    local_model: "ollama/jarvis-brain"        # Fine-tuned JARVIS brain (Qwen3.5-4B SFT)
-    local_model_strong: "ollama/qwen3:30b-a3b"  # Strong MoE model for medium queries
+    enabled: true
     cache:
       similarity_threshold: 0.92  # Cosine similarity để match cache
       ttl_seconds: 86400          # Cache expire sau 24h

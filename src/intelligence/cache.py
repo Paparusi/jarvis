@@ -178,6 +178,13 @@ class SemanticCache:
         conn.commit()
         return cursor.rowcount
 
+    def clear_all(self) -> int:
+        """Remove ALL cache entries. Returns number removed."""
+        conn = get_connection()
+        cursor = conn.execute("DELETE FROM llm_cache")
+        conn.commit()
+        return cursor.rowcount
+
     def get_stats(self) -> dict:
         conn = get_connection()
         now = time.time()

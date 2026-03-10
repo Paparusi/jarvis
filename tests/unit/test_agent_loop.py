@@ -91,13 +91,16 @@ def agent_loop(tool_registry):
     assembler = PromptAssembler(max_context_tokens=2000)
     tracer = ReasoningTracer()
 
-    return AgentLoop(
-        tool_registry=tool_registry,
-        assembler=assembler,
-        tracer=tracer,
-        cloud_model="test-model",
-        max_iterations=3,
-    )
+    with patch("src.intelligence.agent_loop.get_claude_client") as mock_get:
+        mock_get.return_value = AsyncMock()
+        loop = AgentLoop(
+            tool_registry=tool_registry,
+            assembler=assembler,
+            tracer=tracer,
+            cloud_model="test-model",
+            max_iterations=3,
+        )
+    return loop
 
 
 @pytest.fixture
@@ -111,9 +114,11 @@ class TestAgentLoopBasic:
     @pytest.mark.asyncio
     async def test_simple_response_no_tools(self, agent_loop, session):
         """Test a simple LLM response without tool calls."""
-        with patch("litellm.acompletion", new_callable=AsyncMock) as mock_llm:
-            mock_llm.return_value = make_response("Hello! How can I help?")
-            result = await agent_loop.run(session=session, user_message="Hello", use_tools=False)
+        mock_client = AsyncMock()
+        mock_client.complete = AsyncMock(return_value=make_response("Hello! How can I help?"))
+        agent_loop._client = mock_client
+
+        result = await agent_loop.run(session=session, user_message="Hello", use_tools=False)
 
         assert isinstance(result, AgentResponse)
         assert "Hello" in result.content
@@ -133,8 +138,11 @@ class TestAgentLoopBasic:
             else:
                 return make_response("Here are the results!")
 
-        with patch("litellm.acompletion", side_effect=mock_completion):
-            result = await agent_loop.run(session=session, user_message="search for test")
+        mock_client = AsyncMock()
+        mock_client.complete = AsyncMock(side_effect=mock_completion)
+        agent_loop._client = mock_client
+
+        result = await agent_loop.run(session=session, user_message="search for test")
 
         assert result.content == "Here are the results!"
         assert call_count == 2
@@ -142,9 +150,11 @@ class TestAgentLoopBasic:
     @pytest.mark.asyncio
     async def test_strips_thinking_tags(self, agent_loop, session):
         """Qwen3 thinking tags are stripped from response."""
-        with patch("litellm.acompletion", new_callable=AsyncMock) as mock_llm:
-            mock_llm.return_value = make_response("<think>thinking...</think>Final answer")
-            result = await agent_loop.run(session=session, user_message="test")
+        mock_client = AsyncMock()
+        mock_client.complete = AsyncMock(return_value=make_response("<think>thinking...</think>Final answer"))
+        agent_loop._client = mock_client
+
+        result = await agent_loop.run(session=session, user_message="test")
 
         assert result.content == "Final answer"
         assert "<think>" not in result.content
@@ -156,9 +166,11 @@ class TestAgentLoopResilience:
     @pytest.mark.asyncio
     async def test_llm_failure_returns_fallback(self, agent_loop, session):
         """When LLM fails all retries, return fallback response."""
-        with patch("litellm.acompletion", new_callable=AsyncMock) as mock_llm:
-            mock_llm.side_effect = RuntimeError("API down")
-            result = await agent_loop.run(session=session, user_message="test")
+        mock_client = AsyncMock()
+        mock_client.complete = AsyncMock(side_effect=RuntimeError("API down"))
+        agent_loop._client = mock_client
+
+        result = await agent_loop.run(session=session, user_message="test")
 
         assert isinstance(result, AgentResponse)
         assert "Xin lỗi" in result.content
@@ -173,19 +185,24 @@ class TestAgentLoopResilience:
             call_count += 1
             raise RuntimeError("401 Unauthorized")
 
-        with patch("litellm.acompletion", side_effect=mock_completion):
-            result = await agent_loop.run(session=session, user_message="test")
+        mock_client = AsyncMock()
+        mock_client.complete = AsyncMock(side_effect=mock_completion)
+        agent_loop._client = mock_client
+
+        result = await agent_loop.run(session=session, user_message="test")
 
         assert call_count == 1  # No retry for auth errors
 
     @pytest.mark.asyncio
     async def test_truncated_response_detected(self, agent_loop, session):
         """finish_reason='length' should add truncation warning."""
-        with patch("litellm.acompletion", new_callable=AsyncMock) as mock_llm:
-            mock_llm.return_value = make_response(
-                "Partial response...", finish_reason="length",
-            )
-            result = await agent_loop.run(session=session, user_message="write essay")
+        mock_client = AsyncMock()
+        mock_client.complete = AsyncMock(return_value=make_response(
+            "Partial response...", finish_reason="length",
+        ))
+        agent_loop._client = mock_client
+
+        result = await agent_loop.run(session=session, user_message="write essay")
 
         assert "Partial response..." in result.content
         assert "bị cắt" in result.content
@@ -198,8 +215,11 @@ class TestAgentLoopResilience:
         async def mock_completion(**kwargs):
             return make_tool_response("test_tool", '{"query":"loop"}')
 
-        with patch("litellm.acompletion", side_effect=mock_completion):
-            result = await agent_loop.run(session=session, user_message="search forever")
+        mock_client = AsyncMock()
+        mock_client.complete = AsyncMock(side_effect=mock_completion)
+        agent_loop._client = mock_client
+
+        result = await agent_loop.run(session=session, user_message="search forever")
 
         # Should have summary of tool calls made
         assert "test_tool" in result.content or "Xin lỗi" in result.content
@@ -219,8 +239,11 @@ class TestAgentLoopResilience:
                 # Second call: LLM fails
                 raise RuntimeError("API down after tool call")
 
-        with patch("litellm.acompletion", side_effect=mock_completion):
-            result = await agent_loop.run(session=session, user_message="multi-step")
+        mock_client = AsyncMock()
+        mock_client.complete = AsyncMock(side_effect=mock_completion)
+        agent_loop._client = mock_client
+
+        result = await agent_loop.run(session=session, user_message="multi-step")
 
         # Should mention the tool call that was made
         assert "test_tool" in result.content
@@ -272,11 +295,13 @@ class TestBuildFallbackResponse:
         from src.intelligence.prompt_assembler import PromptAssembler
         from src.metacognition.tracer import ReasoningTracer
 
-        return AgentLoop(
-            tool_registry=tool_registry,
-            assembler=PromptAssembler(max_context_tokens=2000),
-            tracer=ReasoningTracer(),
-        )
+        with patch("src.intelligence.agent_loop.get_claude_client") as mock_get:
+            mock_get.return_value = AsyncMock()
+            return AgentLoop(
+                tool_registry=tool_registry,
+                assembler=PromptAssembler(max_context_tokens=2000),
+                tracer=ReasoningTracer(),
+            )
 
     def test_no_tool_calls(self, loop):
         result = loop._build_fallback_response([])

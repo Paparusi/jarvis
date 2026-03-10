@@ -94,18 +94,22 @@ class TestDecomposerLLM:
 
     @pytest.mark.asyncio
     async def test_llm_decompose_parses_json(self, decomposer):
-        llm_response = MagicMock()
-        llm_response.choices = [MagicMock()]
-        llm_response.choices[0].message.content = '''{
+        from src.intelligence.llm_models import LLMResponse, Choice, Message
+        llm_response = LLMResponse(
+            choices=[Choice(message=Message(content='''{
             "subtasks": [
                 {"id": "t1", "description": "Research topic", "type": "research", "depends_on": [], "tools_hint": ["web_search"], "priority": 1},
                 {"id": "t2", "description": "Write summary", "type": "generation", "depends_on": ["t1"], "priority": 2}
             ],
             "parallel_groups": [["t1"], ["t2"]],
             "requires_synthesis": false
-        }'''
+        }'''))],
+        )
 
-        with patch("litellm.acompletion", new_callable=AsyncMock, return_value=llm_response):
+        with patch("src.swarm.decomposer.get_claude_client") as mock_get_client:
+            mock_client = AsyncMock()
+            mock_client.complete = AsyncMock(return_value=llm_response)
+            mock_get_client.return_value = mock_client
             plan = await decomposer.decompose("Research and " * 20)  # Long enough
 
         assert len(plan.subtasks) == 2
@@ -115,7 +119,10 @@ class TestDecomposerLLM:
 
     @pytest.mark.asyncio
     async def test_llm_failure_falls_back(self, decomposer):
-        with patch("litellm.acompletion", new_callable=AsyncMock, side_effect=RuntimeError("API down")):
+        with patch("src.swarm.decomposer.get_claude_client") as mock_get_client:
+            mock_client = AsyncMock()
+            mock_client.complete = AsyncMock(side_effect=RuntimeError("API down"))
+            mock_get_client.return_value = mock_client
             plan = await decomposer.decompose("Do many things " * 20)
 
         # Fallback: single subtask

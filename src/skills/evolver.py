@@ -17,8 +17,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-import litellm
-
+from src.intelligence.claude_client import get_claude_client
 from src.memory.embeddings import cosine_similarity, get_embedding
 from src.skills.loader import Skill, SkillLoader
 from src.skills.registry import SkillRegistry
@@ -282,8 +281,8 @@ Keep the same YAML frontmatter structure. Do NOT change the skill name.
 Write in the same language as the original (Vietnamese or English)."""
 
         try:
-            response = await litellm.acompletion(
-                model="claude-sonnet-4-20250514",
+            client = get_claude_client()
+            response = await client.complete(
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=2000,
                 temperature=0.3,

@@ -1,7 +1,7 @@
 """Health Monitor — Background health monitoring with proactive alerts.
 
 Runs periodic health checks and notifies users when systems degrade.
-Provides graceful degradation: if Ollama is down, switches to cloud-only mode.
+Monitors API keys, disk space, database, and other system health.
 """
 
 from __future__ import annotations
@@ -25,11 +25,9 @@ _ALERT_COOLDOWN = 1800  # 30 minutes
 @dataclass
 class SystemHealth:
     """Current system health state."""
-    ollama_available: bool = True
     api_keys_ok: bool = True
     disk_ok: bool = True
     db_ok: bool = True
-    degraded_mode: str = ""  # "", "cloud_only", "limited"
 
 
 class HealthMonitor:
@@ -101,20 +99,7 @@ class HealthMonitor:
 
         for check in checks:
             if check.name == "Ollama":
-                was_available = self._health.ollama_available
-                self._health.ollama_available = check.status == "ok"
-
-                if was_available and not self._health.ollama_available:
-                    self._health.degraded_mode = "cloud_only"
-                    alerts.append(
-                        "⚠️ **Ollama không khả dụng** — chuyển sang chế độ cloud-only.\n"
-                        "Local model sẽ bị tắt cho đến khi Ollama hoạt động trở lại."
-                    )
-                elif not was_available and self._health.ollama_available:
-                    self._health.degraded_mode = ""
-                    alerts.append(
-                        "✅ **Ollama đã hoạt động trở lại** — local model đã sẵn sàng."
-                    )
+                continue  # No local models — skip Ollama check
 
             elif check.name == "API Keys":
                 was_ok = self._health.api_keys_ok
@@ -151,8 +136,7 @@ class HealthMonitor:
 
         if checks:
             statuses = {c.name: c.status for c in checks}
-            log.debug("health_check_complete", statuses=statuses,
-                      degraded=self._health.degraded_mode or "none")
+            log.debug("health_check_complete", statuses=statuses)
 
     async def _send_alert(self, message: str) -> None:
         """Send alert to all registered users."""

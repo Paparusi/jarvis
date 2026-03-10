@@ -66,10 +66,10 @@ async def analyze_image(
         return ToolResult(success=False, output="", error=str(e))
 
     try:
-        import litellm
+        from src.intelligence.claude_client import get_claude_client
 
-        response = await litellm.acompletion(
-            model="anthropic/claude-sonnet-4-20250514",
+        client = get_claude_client()
+        response = await client.complete(
             messages=[{
                 "role": "user",
                 "content": [
@@ -85,6 +85,7 @@ async def analyze_image(
                     },
                 ],
             }],
+            model="claude-sonnet-4-20250514",
             max_tokens=1500,
         )
 
@@ -139,10 +140,10 @@ async def analyze_image_from_bytes(
     b64_data = base64.b64encode(image_bytes).decode()
 
     try:
-        import litellm
+        from src.intelligence.claude_client import get_claude_client
 
-        response = await litellm.acompletion(
-            model="anthropic/claude-sonnet-4-20250514",
+        client = get_claude_client()
+        response = await client.complete(
             messages=[{
                 "role": "user",
                 "content": [
@@ -158,6 +159,7 @@ async def analyze_image_from_bytes(
                     },
                 ],
             }],
+            model="claude-sonnet-4-20250514",
             max_tokens=1500,
         )
 

@@ -1,12 +1,11 @@
-"""LLM Router — 3-tier intelligent routing: Cache → Local → Cloud.
+"""LLM Router — 2-tier intelligent routing: Cache → Cloud.
 
 Flow:
 1. Check Semantic Cache → cache hit? Return cached response
 2. Classify complexity → simple/medium/complex
-3. Simple → Local model (Ollama/Qwen3) — no tools
-4. Medium/Complex OR local fails → Agent Loop (cloud with tools)
-5. Cache response for future use
-6. Log everything for Brain Independence training data
+3. All queries → Agent Loop (cloud with tools)
+4. Cache response for future use
+5. Log everything for Brain Independence training data
 """
 
 from __future__ import annotations
@@ -17,11 +16,10 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
 
-import litellm
-
 from src.gateway.models import AgentResponse, SessionState
 from src.intelligence.agent_loop import AgentLoop
 from src.intelligence.cache import SemanticCache
+from src.intelligence.claude_client import get_claude_client
 from src.intelligence.prompt_assembler import PromptAssembler
 from src.intelligence.tracker import CostTracker
 from src.metacognition.confidence import ConfidenceCalibrator
@@ -32,8 +30,6 @@ from src.utils.config import load_config
 from src.utils.logging import get_logger
 
 log = get_logger("intelligence.router")
-
-litellm.suppress_debug_info = True
 
 
 # Complexity classification keywords
@@ -49,6 +45,22 @@ _SIMPLE_INDICATORS = [
     "ok", "được", "tạm biệt", "bye", "có", "không",
     "tên", "name", "thời gian", "time", "ngày", "date",
 ]
+
+# Queries matching these patterns should NEVER be cached (real-time data)
+_NOCACHE_PATTERNS = re.compile(
+    r"(?i)"
+    r"(?:xauusd|gold|vàng|giá vàng|mt5|trading|trade|lệnh|position|pending)"
+    r"|(?:phân tích.*(?:thị trường|market|chart|kỹ thuật|technical))"
+    r"|(?:giá|price|bid|ask|spread|pip)"
+    r"|(?:tin tức|news|thời sự)"
+    r"|(?:thời tiết|weather)"
+    r"|(?:/mt5|/trade|/signal|/analyze)"
+)
+
+
+def should_skip_cache(query: str) -> bool:
+    """Return True if query should bypass cache (real-time/trading data)."""
+    return bool(_NOCACHE_PATTERNS.search(query))
 
 
 def strip_thinking(text: str) -> str:
@@ -225,7 +237,7 @@ class ResponseStream:
 
 
 class LLMRouter:
-    """3-tier LLM router: Cache → Local → Cloud (with tools)."""
+    """2-tier LLM router: Cache → Cloud (with tools)."""
 
     def __init__(
         self,
@@ -240,10 +252,8 @@ class LLMRouter:
         self._max_tokens = intel_config.get("max_tokens", 4096)
         self._temperature = intel_config.get("temperature", 0.7)
 
-        # Local model config — dual model: fast (simple) + strong (medium)
-        self._local_model = router_config.get("local_model", "ollama/qwen3.5:4b")
-        self._local_model_strong = router_config.get("local_model_strong", "")
-        self._local_enabled = router_config.get("enabled", False)
+        # Claude client (replaces litellm)
+        self._claude_client = get_claude_client()
 
         # Tool registry
         self._tool_registry = tool_registry or ToolRegistry()
@@ -279,20 +289,27 @@ class LLMRouter:
             assembler=self._assembler,
             tracer=self._tracer,
             cloud_model=self._cloud_model,
-            local_model=self._local_model,
             max_iterations=8,
             max_tokens=self._max_tokens,
             temperature=self._temperature,
         )
 
+        # Company CEO (set by JarvisApp.init_company())
+        self._ceo = None
+
         log.info(
             "router_initialized",
             cloud_model=self._cloud_model,
-            local_model=self._local_model,
-            local_model_strong=self._local_model_strong or "none",
-            local_enabled=self._local_enabled,
             tools=len(self._tool_registry.get_all()),
         )
+
+    @property
+    def ceo(self):
+        return self._ceo
+
+    @ceo.setter
+    def ceo(self, value):
+        self._ceo = value
 
     @property
     def tracker(self) -> CostTracker:
@@ -336,28 +353,30 @@ class LLMRouter:
         start_time = time.monotonic()
         trace = self._tracer.start_trace(session.session_id, user_message)
 
-        # 1. Cache check
-        cached = await self._cache.get(user_message)
-        if cached:
-            elapsed_ms = int((time.monotonic() - start_time) * 1000)
-            self._tracker.log_usage(
-                model=cached["model_used"], tokens_in=0, tokens_out=0,
-                latency_ms=elapsed_ms, source="cache", cached=True,
-            )
-            trace.add_step("cache", "check", "hit")
-            trace.final_model = f"{cached['model_used']}(cached)"
-            self._tracer.save_trace(trace)
-            stream.response = AgentResponse(
-                request_id=session.session_id,
-                session_id=session.session_id,
-                content=cached["response_text"],
-                model_used=f"{cached['model_used']}(cached)",
-                latency_ms=elapsed_ms,
-            )
-            yield StreamChunk(text=cached["response_text"], is_done=True)
-            return
+        # 1. Cache check — skip for real-time/trading queries
+        skip_cache = should_skip_cache(user_message)
+        if not skip_cache:
+            cached = await self._cache.get(user_message)
+            if cached:
+                elapsed_ms = int((time.monotonic() - start_time) * 1000)
+                self._tracker.log_usage(
+                    model=cached["model_used"], tokens_in=0, tokens_out=0,
+                    latency_ms=elapsed_ms, source="cache", cached=True,
+                )
+                trace.add_step("cache", "check", "hit")
+                trace.final_model = f"{cached['model_used']}(cached)"
+                self._tracer.save_trace(trace)
+                stream.response = AgentResponse(
+                    request_id=session.session_id,
+                    session_id=session.session_id,
+                    content=cached["response_text"],
+                    model_used=f"{cached['model_used']}(cached)",
+                    latency_ms=elapsed_ms,
+                )
+                yield StreamChunk(text=cached["response_text"], is_done=True)
+                return
 
-        trace.add_step("cache", "check", "miss")
+        trace.add_step("cache", "check", "skip" if skip_cache else "miss")
 
         # 2. Build messages
         messages = await self._build_messages(
@@ -371,38 +390,24 @@ class LLMRouter:
         total_tokens_out = 0
 
         try:
-            kwargs: dict[str, Any] = {
-                "model": model,
-                "messages": messages,
-                "max_tokens": self._max_tokens,
-                "temperature": self._temperature,
-                "stream": True,
-            }
-
-            if "ollama" in model:
-                kwargs["api_base"] = "http://localhost:11434"
-                kwargs["timeout"] = 60
-
-            response = await litellm.acompletion(**kwargs)
-
-            async for chunk in response:
+            async for chunk in self._claude_client.stream(
+                messages=messages,
+                model=model,
+                max_tokens=self._max_tokens,
+                temperature=self._temperature,
+            ):
                 choice = chunk.choices[0] if chunk.choices else None
                 if not choice:
                     continue
                 delta = choice.delta
                 if delta and delta.content:
-                    text = delta.content
-                    full_content += text
-                    yield StreamChunk(text=text)
-
-                # Collect usage from stream end
-                if hasattr(chunk, "usage") and chunk.usage:
-                    total_tokens_in = chunk.usage.prompt_tokens or 0
-                    total_tokens_out = chunk.usage.completion_tokens or 0
-
-            # Strip thinking tags if present (Qwen3)
-            if "<think>" in full_content:
-                full_content = strip_thinking(full_content)
+                    full_content += delta.content
+                    yield StreamChunk(text=delta.content)
+                if choice.finish_reason:
+                    # Final chunk — has usage
+                    if chunk.usage:
+                        total_tokens_in = chunk.usage.prompt_tokens or 0
+                        total_tokens_out = chunk.usage.completion_tokens or 0
 
             elapsed_ms = int((time.monotonic() - start_time) * 1000)
 
@@ -414,8 +419,8 @@ class LLMRouter:
             )
             self._tracker.record_success(model)
 
-            # Cache response
-            if full_content:
+            # Cache response (skip for real-time queries)
+            if full_content and not skip_cache:
                 await self._cache.put(
                     user_message, full_content, model,
                     total_tokens_in, total_tokens_out,
@@ -461,99 +466,84 @@ class LLMRouter:
         skill_context: str = "",
         use_tools: bool = True,
     ) -> AgentResponse:
-        """Route a message through the 3-tier pipeline."""
+        """Route a message through the 2-tier pipeline (Cache → Cloud)."""
         start_time = time.monotonic()
 
         # Start reasoning trace
         trace = self._tracer.start_trace(session.session_id, user_message)
 
-        # 1. Check semantic cache — works for factual queries regardless of context
-        cached = await self._cache.get(user_message)
-        if cached:
-            elapsed_ms = int((time.monotonic() - start_time) * 1000)
-            self._tracker.log_usage(
-                model=cached["model_used"],
-                tokens_in=0, tokens_out=0,
-                latency_ms=elapsed_ms,
-                source="cache", cached=True,
-            )
-            trace.add_step("cache", "check", "hit", model=cached["model_used"])
-            trace.final_model = f"{cached['model_used']}(cached)"
-            self._tracer.save_trace(trace)
-            log.info("routed_cache_hit", latency_ms=elapsed_ms)
-            return AgentResponse(
-                request_id=session.session_id,
-                session_id=session.session_id,
-                content=cached["response_text"],
-                model_used=f"{cached['model_used']}(cached)",
-                latency_ms=elapsed_ms,
-            )
+        # 1. Check semantic cache — skip for real-time/trading queries
+        skip_cache = should_skip_cache(user_message)
+        if not skip_cache:
+            cached = await self._cache.get(user_message)
+            if cached:
+                elapsed_ms = int((time.monotonic() - start_time) * 1000)
+                self._tracker.log_usage(
+                    model=cached["model_used"],
+                    tokens_in=0, tokens_out=0,
+                    latency_ms=elapsed_ms,
+                    source="cache", cached=True,
+                )
+                trace.add_step("cache", "check", "hit", model=cached["model_used"])
+                trace.final_model = f"{cached['model_used']}(cached)"
+                self._tracer.save_trace(trace)
+                log.info("routed_cache_hit", latency_ms=elapsed_ms)
+                return AgentResponse(
+                    request_id=session.session_id,
+                    session_id=session.session_id,
+                    content=cached["response_text"],
+                    model_used=f"{cached['model_used']}(cached)",
+                    latency_ms=elapsed_ms,
+                )
 
-        trace.add_step("cache", "check", "miss")
+        trace.add_step("cache", "check", "skip" if skip_cache else "miss")
 
-        # 2. Classify complexity
+        # 2. Classify complexity (for tracing/logging)
         complexity = classify_complexity(user_message)
         trace.add_step("classify", "complexity", complexity)
 
-        # 3. Check feedback loop — has local model historically failed on similar queries?
-        feedback_escalate = False
-        if self._local_enabled and complexity in ("simple", "medium"):
-            try:
-                feedback_escalate, penalty = await self._feedback_loop.check_escalation(
-                    user_message
+        # 3. If CEO is set, delegate routing to Company structure
+        if self._ceo and use_tools:
+            trace.add_step("route", "ceo", "delegating")
+            result = await self._ceo.handle(
+                session=session,
+                message=user_message,
+                memory_context=memory_context,
+                skill_context=skill_context,
+                use_tools=use_tools,
+            )
+
+            cost = self._tracker.estimate_cost(
+                self._cloud_model, result.tokens_in, result.tokens_out
+            )
+            self._tracker.log_usage(
+                model=self._cloud_model,
+                tokens_in=result.tokens_in,
+                tokens_out=result.tokens_out,
+                latency_ms=result.latency_ms,
+                source="cloud",
+            )
+            self._tracker.record_success(self._cloud_model)
+            result.cost_usd = cost
+
+            if result.content and not skip_cache:
+                await self._cache.put(
+                    user_message, result.content, result.model_used,
+                    result.tokens_in, result.tokens_out,
                 )
-                if feedback_escalate:
-                    trace.add_step(
-                        "feedback_loop", "escalate",
-                        f"penalty={penalty:.2f}",
-                        reason="similar_queries_got_negative_feedback",
-                    )
-            except Exception as e:
-                log.debug("feedback_loop_check_failed", error=str(e))
 
-        # 4. Triage: local models for text-only tasks
-        #    Tool-requiring requests → always cloud (small models can't
-        #    reliably call tools — OpenClaw pattern)
-        msg_needs_tools = use_tools and needs_tool_access(user_message)
+            trace.final_model = result.model_used
+            dept_info = result.reasoning_trace or "general"
+            trace.add_step("route", "department", dept_info)
+            self._tracer.save_trace(trace)
+            return result
 
-        if msg_needs_tools:
-            trace.add_step("triage", "skip_local", "needs_tools")
-
-        if (
-            self._local_enabled
-            and complexity in ("simple", "medium")
-            and not feedback_escalate
-            and not msg_needs_tools
-        ):
-            # Use fast model (4B) for all interactive queries (think=false: 0.3-1.3s)
-            # Strong model (30B) reserved as quality fallback if 4B confidence is low
-            local_model = self._local_model
-
-            if self._tracker.is_model_available(local_model):
-                trace.add_step("route", "try_local", local_model, complexity=complexity)
-                result = await self._try_local(
-                    session, user_message, memory_context, complexity,
-                    skill_context, trace, model_override=local_model,
-                )
-                if result:
-                    await self._cache.put(
-                        user_message, result.content, result.model_used,
-                        result.tokens_in, result.tokens_out,
-                    )
-                    trace.final_model = result.model_used
-                    trace.confidence_score = result.confidence_score
-                    self._tracer.save_trace(trace)
-                    return result
-
-                trace.was_escalated = True
-                trace.add_step("escalate", "local_failed", "falling_back_to_cloud")
-
-        # 5. Cloud fallback (always works)
+        # 4. Fallback: direct cloud call (no CEO or use_tools=False)
         trace.add_step("route", "cloud", self._cloud_model, use_tools=use_tools)
         result = await self._call_cloud(session, user_message, memory_context, skill_context, use_tools=use_tools)
 
-        # Cache cloud response too
-        if result.content:
+        # Cache cloud response (skip for real-time queries)
+        if result.content and not skip_cache:
             await self._cache.put(
                 user_message, result.content, result.model_used,
                 result.tokens_in, result.tokens_out,
@@ -562,111 +552,6 @@ class LLMRouter:
         trace.final_model = result.model_used
         self._tracer.save_trace(trace)
         return result
-
-    async def _try_local(
-        self,
-        session: SessionState,
-        user_message: str,
-        memory_context: str,
-        complexity: str,
-        skill_context: str = "",
-        trace: "ReasoningTrace | None" = None,
-        model_override: str = "",
-    ) -> AgentResponse | None:
-        """Try local model for TEXT-ONLY responses.
-
-        Local models (Qwen3:4b) are used ONLY for conversational tasks
-        that don't need tools. Tool-requiring requests are routed to cloud
-        by the triage step in route() — small models can't reliably call
-        tools (validated by OpenClaw community).
-
-        Returns None if fails → triggers cloud fallback.
-        """
-        from src.metacognition.tracer import ReasoningTrace
-        start_time = time.monotonic()
-        model = model_override or self._local_model
-        messages = await self._build_messages(session, user_message, memory_context, skill_context)
-
-        # Adjust max_tokens and timeout based on complexity and model
-        is_strong = model == self._local_model_strong
-        local_max_tokens = 512 if complexity == "simple" else (2048 if is_strong else 1024)
-        timeout = 60 if is_strong else 30
-
-        try:
-            response = await litellm.acompletion(
-                model=model,
-                messages=messages,
-                max_tokens=local_max_tokens,
-                temperature=self._temperature,
-                api_base="http://localhost:11434",
-                timeout=timeout,
-                extra_body={"think": False},  # Disable Qwen3 thinking mode — 15x faster
-            )
-
-            elapsed_ms = int((time.monotonic() - start_time) * 1000)
-            raw_content = response.choices[0].message.content or ""
-            content = strip_thinking(raw_content)
-            usage = response.usage
-
-            tokens_in = usage.prompt_tokens if usage else 0
-            tokens_out = usage.completion_tokens if usage else 0
-
-            self._tracker.log_usage(
-                model=model, tokens_in=tokens_in,
-                tokens_out=tokens_out, latency_ms=elapsed_ms, source="local",
-            )
-            self._tracker.record_success(model)
-
-            # Meta-cognitive confidence check
-            confidence = self._confidence.assess(user_message, content, complexity)
-            if trace:
-                trace.add_step(
-                    "confidence", "assess", confidence.decision,
-                    score=f"{confidence.overall_score:.2f}",
-                    signals={s.name: f"{s.score:.2f}" for s in confidence.signals},
-                )
-            if confidence.should_escalate:
-                log.info(
-                    "confidence_escalate",
-                    model=model,
-                    score=f"{confidence.overall_score:.2f}",
-                    decision=confidence.decision,
-                    reason=confidence.reasoning,
-                    content_preview=content[:80],
-                )
-                return None
-
-            log.info(
-                "routed_local",
-                model=model,
-                complexity=complexity,
-                confidence=f"{confidence.overall_score:.2f}",
-                tokens_out=tokens_out,
-                latency_ms=elapsed_ms,
-            )
-
-            return AgentResponse(
-                request_id=session.session_id,
-                session_id=session.session_id,
-                content=content,
-                model_used=model,
-                tokens_in=tokens_in,
-                tokens_out=tokens_out,
-                latency_ms=elapsed_ms,
-                cost_usd=0.0,
-                confidence_score=confidence.overall_score,
-            )
-
-        except Exception as e:
-            elapsed_ms = int((time.monotonic() - start_time) * 1000)
-            self._tracker.record_failure(model)
-            log.warning(
-                "local_model_failed",
-                model=model,
-                error=str(e),
-                latency_ms=elapsed_ms,
-            )
-            return None
 
     async def _call_cloud(
         self,
@@ -771,65 +656,31 @@ class LLMRouter:
     ) -> AsyncIterator:
         """Route with streaming — yields StreamEvent objects for progressive UI.
 
-        Flow: Cache → Local (if eligible) → Cloud stream with tools.
+        Flow: Cache → Cloud stream with tools.
         """
         from src.intelligence.agent_loop import StreamEvent
 
-        # 1. Cache check
-        cached = await self._cache.get(user_message)
-        if cached:
-            self._tracker.log_usage(
-                model=cached["model_used"], tokens_in=0, tokens_out=0,
-                latency_ms=0, source="cache", cached=True,
-            )
-            resp = AgentResponse(
-                request_id=session.session_id,
-                session_id=session.session_id,
-                content=cached["response_text"],
-                model_used=f"{cached['model_used']}(cached)",
-                latency_ms=0,
-            )
-            yield StreamEvent(type="text", text=cached["response_text"])
-            yield StreamEvent(type="done", response=resp)
-            return
-
-        # 2. Try local model for non-tool queries (same logic as route())
-        complexity = classify_complexity(user_message)
-        msg_needs_tools = needs_tool_access(user_message)
-
-        if (
-            self._local_enabled
-            and complexity in ("simple", "medium")
-            and not msg_needs_tools
-        ):
-            # Check feedback escalation
-            feedback_escalate = False
-            try:
-                feedback_escalate, _ = await self._feedback_loop.check_escalation(
-                    user_message
+        # 1. Cache check — skip for real-time/trading queries
+        skip_cache = should_skip_cache(user_message)
+        if not skip_cache:
+            cached = await self._cache.get(user_message)
+            if cached:
+                self._tracker.log_usage(
+                    model=cached["model_used"], tokens_in=0, tokens_out=0,
+                    latency_ms=0, source="cache", cached=True,
                 )
-            except Exception:
-                pass
+                resp = AgentResponse(
+                    request_id=session.session_id,
+                    session_id=session.session_id,
+                    content=cached["response_text"],
+                    model_used=f"{cached['model_used']}(cached)",
+                    latency_ms=0,
+                )
+                yield StreamEvent(type="text", text=cached["response_text"])
+                yield StreamEvent(type="done", response=resp)
+                return
 
-            if not feedback_escalate:
-                # Use fast model for all interactive queries (think=false: 0.3-1.3s)
-                local_model = self._local_model
-
-                if self._tracker.is_model_available(local_model):
-                    result = await self._try_local(
-                        session, user_message, memory_context, complexity,
-                        skill_context, model_override=local_model,
-                    )
-                    if result:
-                        await self._cache.put(
-                            user_message, result.content, result.model_used,
-                            result.tokens_in, result.tokens_out,
-                        )
-                        yield StreamEvent(type="text", text=result.content)
-                        yield StreamEvent(type="done", response=result)
-                        return
-
-        # 3. Cloud fallback — stream from agent loop
+        # 2. Cloud — stream from agent loop
         has_tools = bool(self._tool_registry.get_all())
         final_response = None
 
@@ -858,8 +709,8 @@ class LLMRouter:
                 self._tracker.record_success(self._cloud_model)
                 final_response.cost_usd = cost
 
-                # Cache
-                if final_response.content:
+                # Cache (skip for real-time queries)
+                if final_response.content and not skip_cache:
                     await self._cache.put(
                         user_message, final_response.content,
                         final_response.model_used,
@@ -896,8 +747,5 @@ class LLMRouter:
             "traces": self._tracer.get_escalation_rate(),
             "tools": self._tool_registry.get_stats(),
             "feedback_loop": self._feedback_loop.get_stats(),
-            "local_enabled": self._local_enabled,
-            "local_model": self._local_model,
-            "local_model_strong": self._local_model_strong or "(not configured)",
             "cloud_model": self._cloud_model,
         }

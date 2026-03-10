@@ -112,11 +112,15 @@ class TestGEPAOptimization:
 
         # Mock LLM response
         improved_md = SAMPLE_SKILL_MD.replace("Step one", "Improved step one with error handling")
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock()]
-        mock_response.choices[0].message.content = improved_md
+        from src.intelligence.llm_models import LLMResponse, Choice, Message
+        mock_response = LLMResponse(
+            choices=[Choice(message=Message(content=improved_md))],
+        )
 
-        with patch("litellm.acompletion", new_callable=AsyncMock, return_value=mock_response):
+        with patch("src.skills.evolver.get_claude_client") as mock_get_client:
+            mock_client = AsyncMock()
+            mock_client.complete = AsyncMock(return_value=mock_response)
+            mock_get_client.return_value = mock_client
             result = await evolver._gepa_optimize(skill)
 
         assert result is True
@@ -137,7 +141,10 @@ class TestGEPAOptimization:
         skill.metadata.success_rate = 0.50
         skill.metadata.usage_count = 15
 
-        with patch("litellm.acompletion", new_callable=AsyncMock, side_effect=RuntimeError("API down")):
+        with patch("src.skills.evolver.get_claude_client") as mock_get_client:
+            mock_client = AsyncMock()
+            mock_client.complete = AsyncMock(side_effect=RuntimeError("API down"))
+            mock_get_client.return_value = mock_client
             result = await evolver._gepa_optimize(skill)
 
         assert result is True

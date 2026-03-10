@@ -13,11 +13,9 @@ Strategy:
 from __future__ import annotations
 
 import hashlib
-import re
 from uuid import uuid4
 
-import litellm
-
+from src.intelligence.claude_client import get_claude_client
 from src.memory.store import get_connection
 from src.utils.logging import get_logger
 
@@ -155,33 +153,25 @@ class ConversationSummarizer:
         return [r["summary"] for r in rows]
 
     async def _generate_summary(self, conversation_text: str) -> str:
-        """Generate summary using local model, with cloud fallback."""
+        """Generate summary using Claude API, with simple fallback."""
         prompt = _SUMMARIZE_PROMPT.format(conversation=conversation_text[:3000])
 
-        # Try local model first
         try:
-            response = await litellm.acompletion(
-                model=self._local_model,
+            client = get_claude_client()
+            response = await client.complete(
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=256,
                 temperature=0.3,
-                api_base="http://localhost:11434",
-                timeout=15,
             )
 
             content = response.choices[0].message.content or ""
-
-            # Strip thinking tags if present
-            if "<think>" in content:
-                content = re.sub(r"<think>.*?</think>\s*", "", content, flags=re.DOTALL)
-
             result = content.strip()
             if len(result) > 20:
                 return result
         except Exception as e:
-            log.debug("local_summarization_failed", error=str(e))
+            log.debug("summarization_failed", error=str(e))
 
-        # Fallback: simple extraction (no API cost)
+        # Fallback: simple extraction
         return self._fallback_summary(conversation_text)
 
     def _fallback_summary(self, conversation_text: str) -> str:
