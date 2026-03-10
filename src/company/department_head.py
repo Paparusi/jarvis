@@ -13,6 +13,7 @@ from src.company.departments import (
     get_department_display_name,
     get_department_tools,
 )
+from src.company.worker import Worker
 from src.gateway.models import AgentResponse, SessionState
 from src.intelligence.agent_loop import AgentLoop
 from src.intelligence.prompt_assembler import PromptAssembler
@@ -81,6 +82,7 @@ class DepartmentHead:
             temperature=temperature,
         )
 
+        self._workers: list[Worker] = []
         self._dept_prompt = _DEPARTMENT_PROMPTS.get(dept, "")
         log.info(
             "department_head_created",
@@ -92,6 +94,39 @@ class DepartmentHead:
     def display_name(self) -> str:
         return get_department_display_name(self.dept)
 
+    def set_workers(self, workers: list[Worker]) -> None:
+        """Attach workers to this department head."""
+        self._workers = workers
+        log.info("dept_workers_set", dept=self.dept.value, workers=len(workers))
+
+    def _select_worker(self, message: str) -> Worker | None:
+        """Select best worker for this message based on tool overlap."""
+        if not self._workers:
+            return None
+
+        msg_lower = message.lower()
+        best_worker = None
+        best_score = -1
+
+        for w in self._workers:
+            if w.status.value != "idle":
+                continue
+            score = sum(
+                1 for tool in w.tools
+                if tool.replace("_", " ") in msg_lower or tool in msg_lower
+            )
+            if score > best_score:
+                best_score = score
+                best_worker = w
+
+        # If no keyword match, pick first idle worker
+        if best_worker is None:
+            for w in self._workers:
+                if w.status.value == "idle":
+                    return w
+
+        return best_worker
+
     async def handle(
         self,
         session: SessionState,
@@ -99,7 +134,24 @@ class DepartmentHead:
         memory_context: str = "",
         skill_context: str = "",
     ) -> AgentResponse:
-        """Handle a request using department-filtered tools."""
+        """Handle request -- delegate to worker if available, else self."""
+        worker = self._select_worker(message)
+
+        if worker:
+            log.info(
+                "dept_delegating_to_worker",
+                dept=self.dept.value,
+                worker=worker.worker_id,
+            )
+            result = await worker.execute_direct(
+                instruction=message,
+                session_id=session.session_id,
+            )
+            dept_name = get_department_display_name(self.dept)
+            result.reasoning_trace = f"[{dept_name} → {worker.name}]"
+            return result
+
+        # Fallback: handle directly (existing behavior)
         dept_context = self._dept_prompt
         if skill_context:
             dept_context = f"{dept_context}\n\n{skill_context}"
@@ -111,14 +163,6 @@ class DepartmentHead:
             skill_context=dept_context,
             use_tools=True,
             tool_filter=self._tool_names,
-        )
-
-        log.info(
-            "department_handled",
-            dept=self.dept.value,
-            tokens_in=result.tokens_in,
-            tokens_out=result.tokens_out,
-            latency_ms=result.latency_ms,
         )
 
         return result

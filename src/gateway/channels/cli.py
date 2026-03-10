@@ -1080,27 +1080,35 @@ Examples:
             print(f"{_RED}❌ MT5 error: {e}{_RESET}")
 
     def _cmd_company(self) -> None:
-        """Show company structure and department status."""
+        """Show company structure."""
         if not self._ceo:
-            print(f"{_DIM}Company structure not initialized.{_RESET}")
+            print("Company structure not initialized.")
             return
 
         status = self._ceo.get_status()
-        print(f"\n{_BOLD}🏢 JARVIS Company{_RESET}\n")
 
-        dept_emojis = {
-            "finance": "💰",
-            "security": "🛡️",
-            "engineering": "⚙️",
-            "research": "🔬",
-            "operations": "📋",
-        }
+        print(f"\n=== JARVIS Tech Startup ===")
+        print(f"CEO: JARVIS")
+        print(f"Departments: {status['total_departments']} | Workers: {status['total_workers']}")
+        print()
 
-        for dept_name, info in status["departments"].items():
-            emoji = dept_emojis.get(dept_name, "📋")
-            print(f"  {emoji} {_BOLD}{info['name']}{_RESET} — {info['tools']} tools")
+        for dept_name, dept_info in status["departments"].items():
+            print(f"[{dept_info['name']}] ({dept_info['tools']} tools)")
+            for w in dept_info.get("workers", []):
+                if w["status"] == "idle":
+                    icon = "+"
+                elif w["status"] == "busy":
+                    icon = "x"
+                else:
+                    icon = "-"
+                cost_str = f"${w['total_cost']:.2f}" if w["total_cost"] > 0 else "$0"
+                print(f"  [{icon}] {w['name']} | {w['tasks_completed']} tasks | {cost_str}")
+            print()
 
-        print(f"\n  📊 Total: {status['total_departments']} departments")
+        if "cost" in status:
+            cost = status["cost"]
+            print(f"Budget: ${cost['total']:.2f} / ${cost['limit']:.2f} today")
+        print()
 
     def _cmd_help(self) -> None:
         print(f"""

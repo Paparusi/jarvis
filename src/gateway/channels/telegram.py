@@ -645,28 +645,46 @@ class TelegramAdapter:
         )
 
     async def _handle_company(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Show company structure and department status."""
+        """Show company structure with departments and workers."""
         if not self._ceo:
             await update.message.reply_text("Company structure not initialized.")
             return
 
         status = self._ceo.get_status()
-        lines = ["🏢 **JARVIS Company**\n"]
-
         dept_emojis = {
             "finance": "💰",
-            "security": "🛡️",
+            "security": "🔒",
             "engineering": "⚙️",
             "research": "🔬",
             "operations": "📋",
         }
 
-        for dept_name, info in status["departments"].items():
-            emoji = dept_emojis.get(dept_name, "📋")
-            lines.append(f"{emoji} **{info['name']}** — {info['tools']} tools")
+        lines = [
+            "🏢 JARVIS Tech Startup",
+            f"👔 CEO: JARVIS",
+            f"📊 Departments: {status['total_departments']} | Workers: {status['total_workers']}",
+            "",
+        ]
 
-        lines.append(f"\n📊 Tong: {status['total_departments']} phong ban")
-        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        for dept_name, dept_info in status["departments"].items():
+            emoji = dept_emojis.get(dept_name, "📁")
+            lines.append(f"{emoji} {dept_info['name']} ({dept_info['tools']} tools)")
+            for w in dept_info.get("workers", []):
+                if w["status"] == "idle":
+                    status_icon = "🟢"
+                elif w["status"] == "busy":
+                    status_icon = "🔴"
+                else:
+                    status_icon = "⚫"
+                cost_str = f"${w['total_cost']:.2f}" if w["total_cost"] > 0 else "$0"
+                lines.append(f"  {status_icon} {w['name']} | {w['tasks_completed']} tasks | {cost_str}")
+            lines.append("")
+
+        if "cost" in status:
+            cost = status["cost"]
+            lines.append(f"💵 Today: ${cost['total']:.2f} / ${cost['limit']:.2f}")
+
+        await update.message.reply_text("\n".join(lines))
 
     async def _show_trading_menu(self, update: Update) -> None:
         """Show inline trading sub-menu."""

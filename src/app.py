@@ -85,6 +85,7 @@ class JarvisApp:
         self.hunter_pipeline = None
         self.trading_brain = None
         self._ceo = None
+        self._worker_registry = None
 
         log.info("jarvis_app_init_done")
 
@@ -187,8 +188,16 @@ class JarvisApp:
         set_trading_brain(self.trading_brain)
 
     def init_company(self) -> None:
-        """Initialize Company Structure — CEO + Department Heads."""
+        """Initialize Company Structure — CEO + Department Heads + Workers."""
         from src.company.ceo import CEO
+        from src.company.worker_registry import WorkerRegistry
+
+        worker_registry = WorkerRegistry(
+            tool_registry=self.tool_registry,
+            assembler=self.router._assembler,
+            tracer=self.router._tracer,
+            cloud_model=self.router._cloud_model,
+        )
 
         ceo = CEO(
             agent_loop=self.router._agent_loop,
@@ -196,10 +205,21 @@ class JarvisApp:
             assembler=self.router._assembler,
             tracer=self.router._tracer,
             cloud_model=self.router._cloud_model,
+            worker_registry=worker_registry,
         )
         self.router.ceo = ceo
         self._ceo = ceo
-        log.info("company_initialized", departments=ceo.get_status()["total_departments"])
+        self._worker_registry = worker_registry
+
+        # Start all workers
+        worker_registry.start_all()
+
+        status = ceo.get_status()
+        log.info(
+            "company_initialized",
+            departments=status["total_departments"],
+            workers=status["total_workers"],
+        )
 
     async def connect_mcp(self) -> int:
         """Connect MCP servers and register their tools. Returns tool count."""
@@ -217,6 +237,8 @@ class JarvisApp:
     async def shutdown(self) -> None:
         """Graceful shutdown of all subsystems."""
         log.info("jarvis_app_shutdown")
+        if self._ceo:
+            await self._ceo.stop_workers()
         if self.trading_brain:
             await self.trading_brain.stop()
         if self.bounty_pipeline and self.bounty_pipeline.is_running:

@@ -154,3 +154,49 @@ class TestCEOStatus:
 
     def test_get_department_general_returns_none(self, ceo):
         assert ceo.get_department(Department.GENERAL) is None
+
+
+class TestCEOWithWorkers:
+    @pytest.fixture
+    def mock_deps(self):
+        loop = MagicMock()
+        loop.run = AsyncMock(return_value=AgentResponse(
+            request_id="test", session_id="test",
+            content="direct response", model_used="test-model",
+        ))
+        registry = MagicMock()
+        registry.get_all.return_value = []
+        registry.get_schemas.return_value = []
+        registry.get_filtered_schemas.return_value = []
+        assembler = MagicMock()
+        tracer = MagicMock()
+        return loop, registry, assembler, tracer
+
+    @pytest.fixture
+    def ceo_with_workers(self, mock_deps):
+        loop, registry, assembler, tracer = mock_deps
+        worker_reg = MagicMock()
+        worker_reg.get_department_workers.return_value = [MagicMock(), MagicMock()]
+        worker_reg.cost_guard.get_daily_usage.return_value = {
+            "total": 0.5,
+            "limit": 10.0,
+            "per_worker": {},
+        }
+        worker_reg.start_all = MagicMock()
+        worker_reg.stop_all = AsyncMock()
+        ceo = CEO(loop, registry, assembler, tracer, worker_registry=worker_reg)
+        return ceo
+
+    def test_workers_wired_to_heads(self, ceo_with_workers):
+        ceo = ceo_with_workers
+        for head in ceo._departments.values():
+            assert len(head._workers) == 2
+
+    def test_status_includes_workers(self, ceo_with_workers):
+        status = ceo_with_workers.get_status()
+        assert status["total_workers"] > 0
+        assert "cost" in status
+
+    def test_status_includes_cost(self, ceo_with_workers):
+        status = ceo_with_workers.get_status()
+        assert status["cost"]["total"] == 0.5

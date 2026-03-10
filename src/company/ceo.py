@@ -16,6 +16,7 @@ from src.company.departments import (
     classify_department,
     get_department_display_name,
 )
+from src.company.worker_registry import WorkerRegistry
 from src.gateway.models import AgentResponse, SessionState
 from src.intelligence.agent_loop import AgentLoop
 from src.intelligence.prompt_assembler import PromptAssembler
@@ -42,10 +43,12 @@ class CEO:
         assembler: PromptAssembler,
         tracer: ReasoningTracer,
         cloud_model: str = "claude-sonnet-4-20250514",
+        worker_registry: WorkerRegistry | None = None,
     ) -> None:
         self._agent_loop = agent_loop  # Main loop for direct handling
         self._tool_registry = tool_registry
         self._cloud_model = cloud_model
+        self._worker_registry = worker_registry
 
         # Initialize department heads
         self._departments: dict[Department, DepartmentHead] = {}
@@ -59,6 +62,12 @@ class CEO:
                 tracer=tracer,
                 cloud_model=cloud_model,
             )
+
+        # Wire workers to department heads
+        if worker_registry:
+            for dept, head in self._departments.items():
+                workers = worker_registry.get_department_workers(dept.value)
+                head.set_workers(workers)
 
         log.info(
             "ceo_initialized",
@@ -127,19 +136,34 @@ class CEO:
             use_tools=use_tools,
         )
 
+    def start_workers(self) -> None:
+        """Start all worker event loops."""
+        if self._worker_registry:
+            self._worker_registry.start_all()
+
+    async def stop_workers(self) -> None:
+        """Stop all worker event loops."""
+        if self._worker_registry:
+            await self._worker_registry.stop_all()
+
     def get_department(self, dept: Department) -> DepartmentHead | None:
         """Get a department head by department enum."""
         return self._departments.get(dept)
 
     def get_status(self) -> dict[str, Any]:
-        """Get CEO and department status."""
-        return {
+        """Company status with departments, workers, and cost."""
+        status: dict[str, Any] = {
             "departments": {
                 dept.value: {
                     "name": head.display_name,
                     "tools": len(head._tool_names),
+                    "workers": [w.get_status_dict() for w in head._workers],
                 }
                 for dept, head in self._departments.items()
             },
             "total_departments": len(self._departments),
+            "total_workers": sum(len(h._workers) for h in self._departments.values()),
         }
+        if self._worker_registry:
+            status["cost"] = self._worker_registry.cost_guard.get_daily_usage()
+        return status
