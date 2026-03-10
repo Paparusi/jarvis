@@ -42,6 +42,7 @@ async def run_telegram() -> None:
     app.init_proactive()
     app.init_bounty()
     app.init_trading_brain()
+    app.init_company()
 
     # Connect MCP servers (async)
     await app.connect_mcp()
@@ -124,6 +125,7 @@ async def run_cli() -> None:
     app.init_dreamtime()
     app.init_bounty()
     app.init_trading_brain()
+    app.init_company()
 
     from src.gateway.channels.cli import CLIAdapter
 

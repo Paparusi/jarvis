@@ -193,6 +193,7 @@ class TelegramAdapter:
             self._bounty_pipeline = app.bounty_pipeline
             self._hunter_pipeline = app.hunter_pipeline
             self._trading_brain = app.trading_brain
+            self._ceo = app._ceo
 
             # Wire trading brain notifications to Telegram
             if self._trading_brain is not None:
@@ -336,6 +337,7 @@ class TelegramAdapter:
         self._app.add_handler(CommandHandler("hunt", self._handle_hunt))
         self._app.add_handler(CommandHandler("mt5", self._handle_mt5))
         self._app.add_handler(CommandHandler("trade", self._handle_trade))
+        self._app.add_handler(CommandHandler("company", self._handle_company))
         self._app.add_handler(CommandHandler("help", self._handle_help))
         self._app.add_handler(CallbackQueryHandler(self._handle_feedback))
         self._app.add_handler(
@@ -624,6 +626,7 @@ class TelegramAdapter:
         """Show help with available commands."""
         await update.message.reply_text(
             "📚 **JARVIS Commands:**\n\n"
+            "🏢 /company — Cấu trúc công ty\n"
             "📊 /status — Trạng thái hệ thống\n"
             "🧠 /memory — Xem bộ nhớ\n"
             "📝 /remember `<text>` — Ghi nhớ\n"
@@ -640,6 +643,30 @@ class TelegramAdapter:
             "💡 Hoặc chat tự nhiên bằng text, voice, gửi file/ảnh.",
             parse_mode="Markdown",
         )
+
+    async def _handle_company(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show company structure and department status."""
+        if not self._ceo:
+            await update.message.reply_text("Company structure not initialized.")
+            return
+
+        status = self._ceo.get_status()
+        lines = ["🏢 **JARVIS Company**\n"]
+
+        dept_emojis = {
+            "finance": "💰",
+            "security": "🛡️",
+            "engineering": "⚙️",
+            "research": "🔬",
+            "operations": "📋",
+        }
+
+        for dept_name, info in status["departments"].items():
+            emoji = dept_emojis.get(dept_name, "📋")
+            lines.append(f"{emoji} **{info['name']}** — {info['tools']} tools")
+
+        lines.append(f"\n📊 Tong: {status['total_departments']} phong ban")
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
     async def _show_trading_menu(self, update: Update) -> None:
         """Show inline trading sub-menu."""

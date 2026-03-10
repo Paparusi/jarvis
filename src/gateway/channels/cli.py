@@ -61,6 +61,8 @@ class CLIAdapter:
             self._evolver = app.evolver
             self._bounty_pipeline = app.bounty_pipeline
             self._hunter_pipeline = app.hunter_pipeline
+            self._trading_brain = app.trading_brain
+            self._ceo = app._ceo
         else:
             # Legacy path — backward compatible standalone init
             self._app = None
@@ -96,6 +98,8 @@ class CLIAdapter:
             self._evolver = SkillEvolver(self._skill_registry, self._skill_loader)
             self._bounty_pipeline = None
             self._hunter_pipeline = None
+            self._trading_brain = None
+            self._ceo = None
 
         # CLI-specific state (always initialized regardless of path)
         self._user_id = "cli_user"
@@ -139,7 +143,7 @@ class CLIAdapter:
 ╚══════════════════════════════════════╝{_RESET}
 
   {_DIM}Skills: {skills_count} | Tools: {tools_count} | Memory: ON{_RESET}
-  {_DIM}Commands: /status /stats /profile /health /memory /skills /train /eval /digest /pentest /bounty /hunt /dreamtime /reset /quit{_RESET}
+  {_DIM}Commands: /company /status /stats /profile /health /memory /skills /train /eval /digest /mt5 /trade /pentest /bounty /hunt /dreamtime /reset /quit{_RESET}
   {_DIM}Gõ tin nhắn rồi Enter để chat.{_RESET}
 """)
 
@@ -193,6 +197,15 @@ class CLIAdapter:
 
         elif cmd.startswith("/hunt"):
             await self._cmd_hunt(cmd)
+
+        elif cmd.startswith("/trade"):
+            await self._cmd_trade(cmd)
+
+        elif cmd == "/mt5":
+            await self._cmd_mt5()
+
+        elif cmd == "/company":
+            self._cmd_company()
 
         elif cmd == "/reset":
             self._session.messages.clear()
@@ -300,7 +313,6 @@ class CLIAdapter:
   🔧 Tools: {tool_stats.get('registered_tools', 0)}
 
 {_BOLD}⚡ Router{_RESET}
-  Local: {'ON' if router_stats['local_enabled'] else 'OFF'} ({router_stats['local_model']})
   Cloud: {router_stats['cloud_model']}
   Cache: {router_stats['cache']['cached_entries']} entries
 
@@ -910,10 +922,191 @@ Examples:
         except Exception as e:
             print(f"{_RED}❌ Hunt error: {e}{_RESET}")
 
+    async def _cmd_trade(self, cmd: str) -> None:
+        """Handle /trade commands."""
+        if self._trading_brain is None:
+            print(f"{_YELLOW}Trading Brain chưa được khởi tạo.{_RESET}")
+            return
+
+        args = cmd.replace("/trade", "").strip().split()
+        subcmd = args[0] if args else "status"
+
+        if subcmd == "status":
+            status = self._trading_brain.get_status()
+            running = "ON" if status["running"] else "OFF"
+            print(f"\n{_BOLD}Trading Brain{_RESET}")
+            print(f"  Status: {running}")
+            print(f"  Plan: {status['plan']}")
+            print(f"  Active Zones: {status['active_zones']}")
+            print(f"  Active Positions: {status['active_positions']}")
+            print(f"  Pending Orders: {status.get('pending_orders', 0)}")
+            print(f"  Trades Taken: {status['trades_taken']}")
+            risk = status.get("risk", {})
+            if risk:
+                state = risk.get("state", {})
+                print(f"  Daily P/L: {state.get('daily_pnl', 0):+.2f}")
+                print(f"  Daily Trades: {state.get('daily_trades', 0)}")
+
+        elif subcmd == "start":
+            await self._trading_brain.start()
+            print(f"{_GREEN}Trading Brain started.{_RESET}")
+
+        elif subcmd == "stop":
+            await self._trading_brain.stop()
+            print(f"{_YELLOW}Trading Brain stopped.{_RESET}")
+
+        elif subcmd == "plan":
+            session = args[1] if len(args) > 1 else ""
+            print(f"{_DIM}Analyzing market...{_RESET}")
+            try:
+                plan_text = await self._trading_brain.plan_now(session)
+                print(plan_text)
+            except Exception as e:
+                print(f"{_RED}Plan error: {e}{_RESET}")
+
+        elif subcmd == "config":
+            rg = self._trading_brain._risk_guard
+            if rg is None:
+                print(f"{_RED}RiskGuard not available.{_RESET}")
+                return
+            if len(args) >= 3:
+                param, value = args[1], args[2]
+                try:
+                    if value.lower() in ("true", "false"):
+                        parsed = value.lower() == "true"
+                    elif "." in value:
+                        parsed = float(value)
+                    else:
+                        parsed = int(value)
+                except ValueError:
+                    parsed = value
+                rg.update_config(**{param: parsed})
+                print(f"{_GREEN}Updated: {param} = {parsed}{_RESET}")
+            else:
+                status = rg.get_status()
+                config = status.get("config", {})
+                print(f"\n{_BOLD}Risk Config{_RESET}")
+                for k, v in config.items():
+                    print(f"  {k}: {v}")
+
+        elif subcmd == "pending":
+            sub_action = args[1] if len(args) > 1 else "list"
+            pm = self._trading_brain.pending_manager
+            if sub_action == "cancel":
+                count = await pm.cancel_all()
+                print(f"{_GREEN}Đã hủy {count} pending order(s).{_RESET}")
+            else:
+                orders = pm.active_orders
+                if not orders:
+                    print(f"{_DIM}Không có pending orders.{_RESET}")
+                else:
+                    print(f"\n{_BOLD}Pending Orders ({len(orders)}){_RESET}")
+                    for ticket, info in orders.items():
+                        direction = info.get("direction", "?").upper()
+                        order_type = info.get("order_type", "?")
+                        price = info.get("price", 0)
+                        sl = info.get("sl", 0)
+                        tp1 = info.get("tp1", 0)
+                        zone_id = info.get("zone_id", "?")
+                        volume = info.get("volume", 0)
+                        print(
+                            f"  #{ticket} {direction} {order_type} @ {price:.2f} "
+                            f"Vol: {volume} SL: {sl:.2f} TP: {tp1:.2f} Zone: {zone_id}"
+                        )
+                    print(f"\n{_DIM}Cancel all: /trade pending cancel{_RESET}")
+
+        elif subcmd == "kill":
+            result = await self._trading_brain.kill()
+            print(f"{_RED}{result}{_RESET}")
+
+        else:
+            print(f"{_DIM}Usage: /trade [status|start|stop|plan|config|pending|kill]{_RESET}")
+
+    async def _cmd_mt5(self) -> None:
+        """Quick MT5 status: account + XAUUSD price + positions."""
+        import asyncio
+
+        print(f"{_DIM}📊 Đang kết nối MT5...{_RESET}")
+
+        try:
+            from src.trading.mt5_client import MT5Client
+
+            client = MT5Client()
+            try:
+                available = await client.is_available()
+                if not available:
+                    print(f"{_RED}❌ MT5 Bridge offline.{_RESET}")
+                    print(f"{_DIM}Kiểm tra Windows: python mt5_bridge.py{_RESET}")
+                    return
+
+                results = await asyncio.gather(
+                    client.get_account(),
+                    client.get_tick(__import__("os").environ.get("TRADING_SYMBOL", "XAUUSD")),
+                    client.get_positions(),
+                    return_exceptions=True,
+                )
+                account, tick, positions = results
+
+                print(f"\n{_BOLD}📊 MT5 Status{_RESET}\n")
+
+                if isinstance(account, dict):
+                    print(f"  💰 Balance: ${account.get('balance', 0):,.2f}")
+                    print(f"  📈 Equity: ${account.get('equity', 0):,.2f}")
+                    print(f"  📊 Profit: ${account.get('profit', 0):+,.2f}")
+                    print(f"  🔒 Margin: ${account.get('margin', 0):,.2f}")
+                    print(f"  🆓 Free: ${account.get('margin_free', 0):,.2f}\n")
+
+                if isinstance(tick, dict):
+                    spread = tick.get('ask', 0) - tick.get('bid', 0)
+                    print(f"  🥇 XAUUSD: {tick['bid']:.2f} / {tick['ask']:.2f} (spread: {spread:.2f})\n")
+
+                if isinstance(positions, list) and positions:
+                    total_pnl = sum(p.get("profit", 0) for p in positions)
+                    print(f"  📋 Vị thế mở: {len(positions)} | P&L: ${total_pnl:+,.2f}")
+                    for p in positions[:5]:
+                        side = "BUY" if p.get("type", 0) == 0 else "SELL"
+                        print(
+                            f"    • {p.get('symbol', '?')} {side} {p.get('volume', 0)} lot | "
+                            f"${p.get('profit', 0):+,.2f}"
+                        )
+                elif isinstance(positions, list):
+                    print("  📋 Không có vị thế mở")
+
+                print()
+            finally:
+                await client.close()
+
+        except Exception as e:
+            print(f"{_RED}❌ MT5 error: {e}{_RESET}")
+
+    def _cmd_company(self) -> None:
+        """Show company structure and department status."""
+        if not self._ceo:
+            print(f"{_DIM}Company structure not initialized.{_RESET}")
+            return
+
+        status = self._ceo.get_status()
+        print(f"\n{_BOLD}🏢 JARVIS Company{_RESET}\n")
+
+        dept_emojis = {
+            "finance": "💰",
+            "security": "🛡️",
+            "engineering": "⚙️",
+            "research": "🔬",
+            "operations": "📋",
+        }
+
+        for dept_name, info in status["departments"].items():
+            emoji = dept_emojis.get(dept_name, "📋")
+            print(f"  {emoji} {_BOLD}{info['name']}{_RESET} — {info['tools']} tools")
+
+        print(f"\n  📊 Total: {status['total_departments']} departments")
+
     def _cmd_help(self) -> None:
         print(f"""
 {_BOLD}JARVIS CLI Commands:{_RESET}
 
+  /company   — Company structure & departments
   /status    — Trạng thái hệ thống
   /stats     — Thống kê chi tiết
   /profile   — Xem Digital Twin
@@ -924,6 +1117,8 @@ Examples:
   /train     — Training data (/train now [4b|14b])
   /eval      — Benchmark model quality
   /digest    — Daily news digest (topics từ sở thích)
+  /mt5       — MT5 status: account + XAUUSD price + positions
+  /trade     — Trading Brain: /trade [status|start|stop|plan|config|pending|kill]
   /pentest   — Pentest tự động: /pentest <target> [scope]
   /bounty    — Bug Bounty Pipeline: /bounty [status|start|stop|programs|findings|review|approve|reject|earnings]
   /hunt      — AI Bug Hunter: /hunt <domain> [full|quick|deep]

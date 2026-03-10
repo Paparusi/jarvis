@@ -84,6 +84,7 @@ class JarvisApp:
         self.bounty_pipeline = None
         self.hunter_pipeline = None
         self.trading_brain = None
+        self._ceo = None
 
         log.info("jarvis_app_init_done")
 
@@ -184,6 +185,21 @@ class JarvisApp:
         # Wire the brain instance into tool handlers
         from src.tools.trading_advanced import set_trading_brain
         set_trading_brain(self.trading_brain)
+
+    def init_company(self) -> None:
+        """Initialize Company Structure — CEO + Department Heads."""
+        from src.company.ceo import CEO
+
+        ceo = CEO(
+            agent_loop=self.router._agent_loop,
+            tool_registry=self.tool_registry,
+            assembler=self.router._assembler,
+            tracer=self.router._tracer,
+            cloud_model=self.router._cloud_model,
+        )
+        self.router.ceo = ceo
+        self._ceo = ceo
+        log.info("company_initialized", departments=ceo.get_status()["total_departments"])
 
     async def connect_mcp(self) -> int:
         """Connect MCP servers and register their tools. Returns tool count."""

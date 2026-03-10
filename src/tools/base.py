@@ -45,7 +45,7 @@ class ToolDefinition:
     requires_confirmation: bool = False  # Ask user before executing
 
     def to_openai_schema(self) -> dict[str, Any]:
-        """Convert to OpenAI-compatible function schema (used by litellm).
+        """Convert to OpenAI-compatible function schema (used by ClaudeClient).
 
         Follows best practices:
         - additionalProperties: false prevents hallucinated params
@@ -123,6 +123,18 @@ class ToolRegistry:
     def get_schemas(self) -> list[dict[str, Any]]:
         """Get all tool schemas for LLM function calling."""
         return [t.to_openai_schema() for t in self._tools.values()]
+
+    def get_filtered(self, tool_names: set[str]) -> list[ToolDefinition]:
+        """Get tools filtered by name set."""
+        return [t for name, t in self._tools.items() if name in tool_names]
+
+    def get_filtered_schemas(self, tool_names: set[str]) -> list[dict[str, Any]]:
+        """Get tool schemas filtered by name set (for LLM function calling)."""
+        return [
+            t.to_openai_schema()
+            for name, t in self._tools.items()
+            if name in tool_names
+        ]
 
     def _apply_defaults(self, tool: ToolDefinition, kwargs: dict[str, Any]) -> dict[str, Any]:
         """Apply default values for missing optional parameters and coerce types."""
