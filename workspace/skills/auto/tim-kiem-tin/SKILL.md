@@ -43,3 +43,8 @@ Sử dụng: web_search, fetch_url
 ## Merged From: tìm-kiếm-tin
 - Original description: Tự động phát hiện từ 3 interactions tương tự. Kích hoạt khi user hỏi về chủ đề liên quan đến tìm kiếm tin.
 - Merged on: 2026-03-06
+
+
+## Merged From: phan-tich-tinh
+- Original description: Tự động phát hiện từ 3 interactions tương tự. Kích hoạt khi user hỏi về chủ đề liên quan đến phan tich tinh.
+- Merged on: 2026-03-10

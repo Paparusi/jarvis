@@ -22,6 +22,8 @@ class Department(str, Enum):
     ENGINEERING = "engineering" # Code analysis, git, docker, development
     RESEARCH = "research"      # Web search, document analysis, deep research
     OPERATIONS = "operations"  # Scheduling, TTS, image analysis, system ops
+    SALES = "sales"            # Lead generation, CRM, customer outreach
+    MARKETING = "marketing"    # Social media, content, brand awareness
 
 
 # Tool name → Department mapping
@@ -70,6 +72,18 @@ TOOL_ALLOCATION: dict[Department, set[str]] = {
         "ip_info", "whois_lookup", "ssl_check",
         "generate_password", "cidr_calc",
     },
+    Department.SALES: {
+        "crm_add_lead", "crm_search", "crm_update",
+        "crm_pipeline", "crm_log_activity",
+        "email_send", "telegram_send",
+        "web_search", "deep_search", "fetch_url",
+    },
+    Department.MARKETING: {
+        "twitter_post", "twitter_search",
+        "social_monitor", "social_analytics",
+        "telegram_send", "email_send",
+        "web_search", "deep_search", "browse_web", "fetch_url",
+    },
 }
 
 # Tools available to ALL departments (shared utilities)
@@ -117,6 +131,23 @@ DEPARTMENT_KEYWORDS: dict[Department, list[str]] = {
         "convert", "encode", "decode", "hash",
         "/remind", "/digest",
     ],
+    Department.SALES: [
+        "bán", "sell", "sale", "sales", "khách hàng", "customer", "client",
+        "lead", "prospect", "deal", "crm", "pipeline", "chăm sóc",
+        "contact", "liên hệ", "giao dịch", "hợp đồng", "contract",
+        "revenue", "doanh thu", "quotation", "báo giá", "proposal",
+        "follow up", "outreach", "cold call", "email marketing",
+        "/sales", "/crm", "/lead",
+    ],
+    Department.MARKETING: [
+        "marketing", "social", "social media", "twitter", "tweet",
+        "post", "đăng bài", "content", "nội dung", "brand", "thương hiệu",
+        "quảng cáo", "ads", "campaign", "chiến dịch", "seo",
+        "facebook", "instagram", "linkedin", "tiktok", "youtube",
+        "viral", "engagement", "followers", "hashtag", "trending",
+        "blog", "newsletter", "pr", "influencer",
+        "/social", "/marketing", "/post",
+    ],
 }
 
 
@@ -154,5 +185,7 @@ def get_department_display_name(dept: Department) -> str:
         Department.ENGINEERING: "Phong Ky thuat",
         Department.RESEARCH: "Phong Nghien cuu",
         Department.OPERATIONS: "Phong Van hanh",
+        Department.SALES: "Phong Kinh doanh",
+        Department.MARKETING: "Phong Marketing",
     }
     return names.get(dept, dept.value)

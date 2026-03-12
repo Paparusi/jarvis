@@ -1,0 +1,15 @@
+{
+  "last_train_at": "2026-03-12T05:38:20.761444+00:00",
+  "last_sft_count": 304,
+  "last_dpo_count": 2789,
+  "train_count": 1,
+  "history": [
+    {
+      "at": "2026-03-12T05:38:20.761444+00:00",
+      "sft_count": 304,
+      "loss": null,
+      "mode": "script_generated",
+      "accuracy": 0.0
+    }
+  ]
+}

@@ -47,9 +47,11 @@ export function useWebSocketHub({
     socket.onmessage = (msg) => {
       try {
         const data = JSON.parse(msg.data);
-        if (data.channel && data.event) {
+        // Hub events use "event", chat responses use "type"
+        const event = data.event || data.type;
+        if (data.channel && event) {
           setEvents((prev) => {
-            const next = [...prev, data as WSEvent];
+            const next = [...prev, { ...data, event, data: data.data ?? data } as WSEvent];
             return next.length > maxEvents ? next.slice(-maxEvents) : next;
           });
         }

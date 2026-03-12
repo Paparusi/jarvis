@@ -17,6 +17,7 @@ from src.company.departments import (
     classify_department,
     get_department_display_name,
 )
+from src.company.messenger import get_messenger
 from src.company.worker_registry import WorkerRegistry
 from src.gateway.event_bus import get_event_bus
 from src.gateway.models import AgentResponse, SessionState
@@ -71,6 +72,15 @@ class CEO:
                 workers = worker_registry.get_department_workers(dept.value)
                 head.set_workers(workers)
 
+        # Register all agents with the messenger
+        messenger = get_messenger()
+        messenger.register_agent("ceo", "ceo", self)
+        for dept, head in self._departments.items():
+            messenger.register_agent(f"dept.{dept.value}", "department_head", head)
+        if worker_registry:
+            for w in worker_registry.get_all():
+                messenger.register_agent(w.worker_id, "worker", w)
+
         log.info(
             "ceo_initialized",
             departments=len(self._departments),
@@ -120,11 +130,33 @@ class CEO:
 
         log.info("ceo_delegate", dept=dept.value, head=head.display_name)
 
+        # Create delegation thread so agents can see the reasoning chain
+        messenger = get_messenger()
+        thread_id = await messenger.delegate(
+            from_id="ceo",
+            to_id=f"dept.{dept.value}",
+            instruction=message,
+            reasoning_chain=f"Classified as {dept.value} based on keyword analysis",
+        )
+
         result = await head.handle(
             session=session,
             message=message,
             memory_context=memory_context,
             skill_context=skill_context,
+            thread_id=thread_id,
+        )
+
+        # Record response on the thread
+        await messenger.send(
+            sender_id=f"dept.{dept.value}",
+            sender_type="department_head",
+            recipient_id="ceo",
+            recipient_type="ceo",
+            message_type="response",
+            content=result.content[:500],
+            thread_id=thread_id,
+            subject="Task completed",
         )
 
         # Tag response with department info

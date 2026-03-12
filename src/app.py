@@ -86,6 +86,7 @@ class JarvisApp:
         self.trading_brain = None
         self._ceo = None
         self._worker_registry = None
+        self.ops_engine = None
 
         log.info("jarvis_app_init_done")
 
@@ -220,6 +221,18 @@ class JarvisApp:
             departments=status["total_departments"],
             workers=status["total_workers"],
         )
+
+    def init_ops_engine(self) -> None:
+        """Initialize Company Operations Engine — scheduler + autonomous bridges."""
+        from src.company.ops_engine import CompanyOpsEngine
+
+        self.ops_engine = CompanyOpsEngine(
+            worker_registry=self._worker_registry,
+            trading_brain=self.trading_brain,
+            bounty_pipeline=self.bounty_pipeline,
+            proactive_engine=self.proactive,
+        )
+        log.info("ops_engine_initialized")
 
     async def connect_mcp(self) -> int:
         """Connect MCP servers and register their tools. Returns tool count."""

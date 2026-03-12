@@ -8,6 +8,7 @@ from enum import Enum
 from typing import Any
 from uuid import uuid4
 
+from src.company.kpi_store import KPIStore
 from src.company.worker_store import MetricsStore, TaskStore, WorkerMemoryStore
 from src.gateway.event_bus import get_event_bus
 from src.gateway.models import AgentResponse, Channel, SessionState
@@ -76,6 +77,7 @@ class Worker:
         self._task_store = TaskStore()
         self._memory_store = WorkerMemoryStore()
         self._metrics_store = MetricsStore()
+        self._kpi_store = KPIStore()
 
         log.info(
             "worker_created",
@@ -124,13 +126,34 @@ class Worker:
     # ------------------------------------------------------------------
 
     async def _run_loop(self) -> None:
-        """Poll for tasks and execute them."""
+        """Poll for tasks, check inbox, and execute."""
         while self._running:
+            # Check internal messages (collaboration requests, escalation responses)
+            await self._check_inbox()
+
             task = self._task_store.claim_task(self.worker_id, self.department)
             if task is not None:
                 await self._execute_task(task)
             else:
                 await asyncio.sleep(self._poll_interval)
+
+    async def _check_inbox(self) -> None:
+        """Process pending messages from other agents."""
+        try:
+            from src.company.messenger import get_messenger
+            messenger = get_messenger()
+            messages = messenger.get_inbox(self.worker_id, unread_only=True)
+            for msg in messages:
+                if msg["message_type"] == "collaboration_request":
+                    self._memory_store.log(
+                        worker_id=self.worker_id,
+                        memory_type="collaboration",
+                        content=f"From {msg['sender_id']}: {msg['content'][:300]}",
+                        metadata={"thread_id": msg["thread_id"], "sender": msg["sender_id"]},
+                    )
+                messenger._message_store.mark_read(msg["id"])
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Task execution
@@ -204,6 +227,30 @@ class Worker:
                 task_id=task_id,
                 latency_ms=elapsed_ms,
             )
+
+            # Auto-save report for ops_engine tasks
+            task_context = task.get("context") or {}
+            if task_context.get("source") == "ops_engine" and task_context.get("report_type"):
+                try:
+                    self._kpi_store.save_report(
+                        department=self.department,
+                        report_type=task_context["report_type"],
+                        title=task_context.get("title", task_context["report_type"]),
+                        content=response.content,
+                        worker_id=self.worker_id,
+                    )
+                    # Update schedule log status
+                    if task_context.get("routine_id"):
+                        self._kpi_store.update_schedule_status(task_context["routine_id"], "completed")
+                    # Log KPI for tracking
+                    self._kpi_store.log_kpi(
+                        department=self.department,
+                        metric_name="report_generated",
+                        value=1.0,
+                        metadata={"report_type": task_context["report_type"], "task_id": task_id},
+                    )
+                except Exception as e:
+                    log.warning("report_save_failed", task_id=task_id, error=str(e))
 
             try:
                 bus = get_event_bus()
@@ -289,7 +336,7 @@ class Worker:
     # ------------------------------------------------------------------
 
     def _build_context(self, task: dict[str, Any]) -> str:
-        """Build context string from role, recent work, and learned patterns."""
+        """Build context string from role, recent work, learned patterns, and message thread."""
         parts: list[str] = [
             f"Worker: {self.name} ({self.worker_id})",
             f"Role: {self.role}",
@@ -316,11 +363,34 @@ class Worker:
         if isinstance(task_context, dict) and task_context:
             parts.append(f"\nTask context: {task_context}")
 
+            # Inject message thread for delegation chain visibility
+            thread_id = task_context.get("thread_id")
+            if thread_id:
+                try:
+                    from src.company.messenger import get_messenger
+                    thread = get_messenger().get_thread(thread_id)
+                    if thread:
+                        parts.append("\nDelegation chain:")
+                        for msg in thread[-5:]:
+                            parts.append(f"  [{msg['sender_id']}] ({msg['message_type']}): {msg['content'][:200]}")
+                except Exception:
+                    pass
+
         return "\n".join(parts)
 
     # ------------------------------------------------------------------
     # Learning
     # ------------------------------------------------------------------
+
+    async def escalate(self, reason: str, task_context: dict[str, Any] | None = None) -> int:
+        """Escalate to department head when stuck."""
+        from src.company.messenger import get_messenger
+        messenger = get_messenger()
+        return await messenger.escalate(
+            worker_id=self.worker_id,
+            reason=reason,
+            task_context=task_context or {},
+        )
 
     def learn_pattern(self, pattern: str, metadata: dict[str, Any] | None = None) -> int:
         """Store a learned pattern in worker memory. Returns the memory row id."""

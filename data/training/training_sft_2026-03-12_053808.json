@@ -1,0 +1,15 @@
+{
+  "stage": "sft",
+  "status": "completed",
+  "started_at": "2026-03-12T05:38:08.130934+00:00",
+  "completed_at": "2026-03-12T05:38:08.134563+00:00",
+  "duration_seconds": 0.0036242889909772202,
+  "dataset_size": 304,
+  "metrics": {
+    "mode": "script_generated",
+    "script_path": "/home/admin_1/projects/jarvis/training/output/run_sft.py",
+    "dataset_size": 304,
+    "instructions": "Install unsloth then run: python /home/admin_1/projects/jarvis/training/output/run_sft.py"
+  },
+  "error": ""
+}

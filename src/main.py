@@ -43,6 +43,7 @@ async def run_telegram() -> None:
     app.init_bounty()
     app.init_trading_brain()
     app.init_company()
+    app.init_ops_engine()
 
     # Connect MCP servers (async)
     await app.connect_mcp()
@@ -74,6 +75,10 @@ async def run_telegram() -> None:
     except Exception as e:
         log.warning("web_server_failed", error=str(e))
 
+    # Start OpsEngine scheduler
+    if app.ops_engine:
+        await app.ops_engine.start()
+
     # Create adapter with shared container
     from src.gateway.channels.telegram import TelegramAdapter
 
@@ -100,6 +105,8 @@ async def run_telegram() -> None:
     await stop_event.wait()
 
     log.info("jarvis_shutting_down")
+    if app.ops_engine:
+        await app.ops_engine.stop()
     if web_server:
         web_server.should_exit = True
     if metrics_server:

@@ -93,6 +93,15 @@ from src.tools.trading_advanced import (
     trade_pending_tool, trade_history_tool,
 )
 
+from src.tools.social import (
+    twitter_post_tool, twitter_search_tool, telegram_send_tool,
+    email_send_tool, social_monitor_tool, social_analytics_tool,
+)
+from src.tools.crm import (
+    crm_add_lead_tool, crm_search_tool, crm_update_tool,
+    crm_pipeline_tool, crm_log_activity_tool,
+)
+
 from src.tools.base import ToolDefinition
 
 ALL_TOOLS: list[ToolDefinition] = [
@@ -164,4 +173,10 @@ ALL_TOOLS: list[ToolDefinition] = [
     # Trading Brain (Phase 4)
     trade_plan_tool, trade_status_tool, trade_config_tool, trade_control_tool,
     trade_pending_tool, trade_history_tool,
+    # Social Media & Outreach
+    twitter_post_tool, twitter_search_tool, telegram_send_tool,
+    email_send_tool, social_monitor_tool, social_analytics_tool,
+    # CRM
+    crm_add_lead_tool, crm_search_tool, crm_update_tool,
+    crm_pipeline_tool, crm_log_activity_tool,
 ]

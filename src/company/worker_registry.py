@@ -70,7 +70,7 @@ def _today_utc() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Worker roster -- the 10 workers that comprise the JARVIS company
+# Worker roster -- the 14 workers that comprise the JARVIS company
 # ---------------------------------------------------------------------------
 
 WORKER_ROSTER: list[dict[str, Any]] = [
@@ -222,6 +222,73 @@ WORKER_ROSTER: list[dict[str, Any]] = [
         "tools": {
             "set_reminder", "list_reminders", "daily_digest",
             "text_to_speech", "analyze_image", "ocr_image",
+        },
+    },
+    # Sales (2)
+    {
+        "worker_id": "sales.account_exec",
+        "name": "Account Executive",
+        "department": "sales",
+        "role": (
+            "Bạn là Account Executive chuyên bán hàng và chăm sóc khách hàng.\n"
+            "Nhiệm vụ: quản lý pipeline, follow up leads, gửi email/tin nhắn, "
+            "tạo proposals, đóng deals.\n"
+            "Focus: conversion rate, customer satisfaction, revenue growth."
+        ),
+        "tools": {
+            "crm_add_lead", "crm_search", "crm_update",
+            "crm_pipeline", "crm_log_activity",
+            "email_send", "telegram_send",
+            "web_search", "fetch_url",
+        },
+    },
+    {
+        "worker_id": "sales.lead_gen",
+        "name": "Lead Generator",
+        "department": "sales",
+        "role": (
+            "Bạn là Lead Generator chuyên tìm kiếm khách hàng tiềm năng.\n"
+            "Nhiệm vụ: research prospects, identify decision makers, "
+            "enrich lead data, qualify leads, build contact lists.\n"
+            "Focus: lead quality, volume, market coverage."
+        ),
+        "tools": {
+            "crm_add_lead", "crm_search", "crm_log_activity",
+            "web_search", "deep_search", "fetch_url",
+            "email_send",
+        },
+    },
+    # Marketing (2)
+    {
+        "worker_id": "marketing.content_creator",
+        "name": "Content Creator",
+        "department": "marketing",
+        "role": (
+            "Bạn là Content Creator chuyên sáng tạo nội dung marketing.\n"
+            "Nhiệm vụ: viết blog posts, social media content, newsletters, "
+            "email campaigns, landing page copy.\n"
+            "Focus: engaging content, SEO, brand voice consistency."
+        ),
+        "tools": {
+            "twitter_post", "email_send", "telegram_send",
+            "web_search", "deep_search", "browse_web", "fetch_url",
+        },
+    },
+    {
+        "worker_id": "marketing.social_manager",
+        "name": "Social Media Manager",
+        "department": "marketing",
+        "role": (
+            "Bạn là Social Media Manager quản lý các kênh social media.\n"
+            "Nhiệm vụ: đăng bài, monitor mentions, track engagement, "
+            "respond to comments, analyze trends, grow audience.\n"
+            "Focus: engagement rate, follower growth, brand awareness."
+        ),
+        "tools": {
+            "twitter_post", "twitter_search",
+            "social_monitor", "social_analytics",
+            "telegram_send",
+            "web_search", "fetch_url",
         },
     },
 ]

@@ -15,6 +15,7 @@ from src.company.departments import (
     get_department_display_name,
     get_department_tools,
 )
+from src.company.messenger import get_messenger
 from src.company.worker import Worker
 from src.gateway.event_bus import get_event_bus
 from src.gateway.models import AgentResponse, SessionState
@@ -52,6 +53,16 @@ _DEPARTMENT_PROMPTS: dict[Department, str] = {
         "Ban la Truong phong Van hanh cua JARVIS Company. "
         "Chuyen ve lap lich, nhac nho, xu ly media, "
         "va cac tien ich he thong."
+    ),
+    Department.SALES: (
+        "Ban la Truong phong Kinh doanh cua JARVIS Company. "
+        "Chuyen ve tim kiem khach hang, quan ly pipeline, "
+        "cham soc khach hang, va dong deal. Dung CRM de quan ly."
+    ),
+    Department.MARKETING: (
+        "Ban la Truong phong Marketing cua JARVIS Company. "
+        "Chuyen ve social media, content marketing, brand awareness, "
+        "va phan tich engagement. Dang bai va tuong tac tren mang xa hoi."
     ),
 }
 
@@ -136,6 +147,7 @@ class DepartmentHead:
         message: str,
         memory_context: str = "",
         skill_context: str = "",
+        thread_id: str | None = None,
     ) -> AgentResponse:
         """Handle request -- delegate to worker if available, else self."""
         worker = self._select_worker(message)
@@ -160,6 +172,19 @@ class DepartmentHead:
                 ))
             except Exception:
                 pass
+
+            # Send delegation message on the thread
+            if thread_id:
+                try:
+                    messenger = get_messenger()
+                    await messenger.delegate(
+                        from_id=f"dept.{self.dept.value}",
+                        to_id=worker.worker_id,
+                        instruction=message,
+                        thread_id=thread_id,
+                    )
+                except Exception:
+                    pass
 
             result = await worker.execute_direct(
                 instruction=message,

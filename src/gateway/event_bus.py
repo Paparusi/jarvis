@@ -61,6 +61,20 @@ class EventType(str, Enum):
     COMPANY_WORKER_DONE = "company_worker_done"
     COMPANY_WORKER_FAIL = "company_worker_fail"
 
+    # Company Operations events
+    COMPANY_OPS_STARTED = "company_ops_started"
+    COMPANY_OPS_TASK_CREATED = "company_ops_task_created"
+    COMPANY_OPS_ROUTINE_DONE = "company_ops_routine_done"
+    COMPANY_OPS_KPI_UPDATE = "company_ops_kpi_update"
+
+    # Company Messaging events
+    COMPANY_MSG_SENT = "company_msg_sent"
+    COMPANY_MSG_ESCALATION = "company_msg_escalation"
+    COMPANY_MSG_COLLABORATION = "company_msg_collaboration"
+    COMPANY_MEETING_STARTED = "company_meeting_started"
+    COMPANY_MEETING_TURN = "company_meeting_turn"
+    COMPANY_MEETING_CONCLUDED = "company_meeting_concluded"
+
     # System events
     ERROR = "error"
     STARTUP = "startup"

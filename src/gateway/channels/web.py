@@ -110,6 +110,16 @@ def create_app(app: JarvisApp | None = None) -> FastAPI:
             "company_worker_busy": "worker_start",
             "company_worker_done": "worker_done",
             "company_worker_fail": "worker_fail",
+            "company_ops_started": "ops_started",
+            "company_ops_task_created": "ops_task",
+            "company_ops_routine_done": "ops_done",
+            "company_ops_kpi_update": "ops_kpi",
+            "company_msg_sent": "msg_sent",
+            "company_msg_escalation": "msg_escalation",
+            "company_msg_collaboration": "msg_collab",
+            "company_meeting_started": "meeting_start",
+            "company_meeting_turn": "meeting_turn",
+            "company_meeting_concluded": "meeting_done",
         }
         ws_event = mapping.get(event.type)
         if ws_event:
@@ -119,6 +129,10 @@ def create_app(app: JarvisApp | None = None) -> FastAPI:
     for evt_type in [
         "company_ceo_route", "company_dept_assign", "company_dept_direct",
         "company_worker_busy", "company_worker_done", "company_worker_fail",
+        "company_ops_started", "company_ops_task_created",
+        "company_ops_routine_done", "company_ops_kpi_update",
+        "company_msg_sent", "company_msg_escalation", "company_msg_collaboration",
+        "company_meeting_started", "company_meeting_turn", "company_meeting_concluded",
     ]:
         event_bus.subscribe(evt_type, _bridge_company_event)
 
@@ -225,6 +239,48 @@ def create_app(app: JarvisApp | None = None) -> FastAPI:
         if not adapter._app or not adapter._app._ceo:
             return JSONResponse({"error": "Company not initialized"})
         return JSONResponse(adapter._app._ceo.get_status())
+
+    @fastapi_app.get("/api/company/kpis")
+    async def api_company_kpis():
+        if not adapter._app or not adapter._app.ops_engine:
+            return JSONResponse({"error": "OpsEngine not initialized"})
+        return JSONResponse(adapter._app.ops_engine.get_kpis())
+
+    @fastapi_app.get("/api/company/reports")
+    async def api_company_reports(limit: int = Query(20), department: str = Query(None)):
+        if not adapter._app or not adapter._app.ops_engine:
+            return JSONResponse({"reports": []})
+        return JSONResponse({"reports": adapter._app.ops_engine.get_reports(limit=limit, department=department)})
+
+    @fastapi_app.get("/api/company/schedule")
+    async def api_company_schedule():
+        if not adapter._app or not adapter._app.ops_engine:
+            return JSONResponse({"schedule": []})
+        return JSONResponse({"schedule": adapter._app.ops_engine.get_schedule()})
+
+    @fastapi_app.get("/api/company/kpis/history")
+    async def api_company_kpi_history(metric: str = Query("report_generated"), days: int = Query(30)):
+        if not adapter._app or not adapter._app.ops_engine:
+            return JSONResponse({"history": []})
+        return JSONResponse({"history": adapter._app.ops_engine.get_kpi_history(metric, days)})
+
+    @fastapi_app.get("/api/company/messages")
+    async def api_company_messages(
+        agent_id: str = Query(None), thread_id: str = Query(None), limit: int = Query(50),
+    ):
+        from src.company.messenger import get_messenger
+        messenger = get_messenger()
+        if thread_id:
+            return JSONResponse({"messages": messenger.get_thread(thread_id)})
+        if agent_id:
+            return JSONResponse({"messages": messenger.get_inbox(agent_id, unread_only=False)})
+        return JSONResponse({"messages": messenger.get_recent_messages(limit=limit)})
+
+    @fastapi_app.get("/api/company/meetings")
+    async def api_company_meetings():
+        from src.company.message_store import MeetingStore
+        store = MeetingStore()
+        return JSONResponse({"meetings": store.get_active_meetings()})
 
     @fastapi_app.get("/api/company/activity")
     async def api_company_activity(limit: int = Query(50)):
@@ -392,12 +448,24 @@ class WebAdapter:
                 "tokens_in": response.tokens_in,
                 "tokens_out": response.tokens_out,
                 "cost": f"${response.cost_usd:.4f}" if response.cost_usd else "free",
-                "tools_used": json.loads(response.reasoning_trace) if response.reasoning_trace else [],
+                "tools_used": self._parse_tools_used(response.reasoning_trace),
             }
 
         except Exception as e:
             log.error("web_message_error", error=str(e))
             yield {"type": "error", "text": f"Lỗi: {e}"}
+
+    @staticmethod
+    def _parse_tools_used(trace: str | None) -> list:
+        """Parse reasoning_trace to tools list, handling non-JSON department tags."""
+        if not trace:
+            return []
+        try:
+            parsed = json.loads(trace)
+            return parsed if isinstance(parsed, list) else [parsed]
+        except (json.JSONDecodeError, TypeError):
+            # CEO/department routing sets trace to human-readable tags like "[Finance → Trader]"
+            return [{"name": "company_routing", "info": trace}]
 
     def handle_feedback(self, message_id: str, rating: str) -> None:
         """Handle user feedback on a response."""

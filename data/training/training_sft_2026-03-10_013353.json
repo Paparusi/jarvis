@@ -1,0 +1,10 @@
+{
+  "stage": "sft",
+  "status": "failed",
+  "started_at": "2026-03-10T01:33:53.745419+00:00",
+  "completed_at": "2026-03-10T01:33:53.876621+00:00",
+  "duration_seconds": 0.13119677500799298,
+  "dataset_size": 304,
+  "metrics": {},
+  "error": "Unsloth cannot find any torch accelerator? You need a GPU."
+}
