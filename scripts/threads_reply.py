@@ -181,18 +181,42 @@ def main():
             
             replies_data = conv_data.get("data", [])
             
+            # Count how many times we already replied in this thread
+            our_replies_count = sum(1 for c in replies_data if c.get("username") == "bong.aiagent")
+            
             for comment in replies_data:
                 cid = comment["id"]
                 
-                # Skip if already replied or it's our own reply
+                # Skip if already replied
                 if cid in replied:
                     continue
+                
+                # Skip our own comments (CRITICAL: prevent reply loop)
                 if comment.get("username") == "bong.aiagent":
+                    replied.add(cid)
+                    continue
+                
+                # Max 3 replies per post to avoid spam
+                if our_replies_count >= 3:
+                    print(f"  Skipping: already replied {our_replies_count} times to this post")
                     replied.add(cid)
                     continue
                 
                 username = comment.get("username", "user")
                 text = comment.get("text", "")
+                
+                # Anti prompt injection: skip suspicious comments
+                injection_patterns = [
+                    "ignore all", "bỏ qua", "bỏ hết", "forget", "disregard",
+                    "stop replying", "ngừng trả lời", "chỉ dẫn cũ", "previous instructions",
+                    "system prompt", "you are now", "act as", "pretend",
+                    "ignore previous", "ignore above", "new instructions",
+                ]
+                text_lower = text.lower()
+                if any(p in text_lower for p in injection_patterns):
+                    print(f"  ⚠️ Skipping prompt injection from @{username}: {text[:60]}...")
+                    replied.add(cid)
+                    continue
                 
                 print(f"  New comment from @{username}: {text[:60]}...")
                 
