@@ -456,16 +456,16 @@ def pick_post(posted: list) -> tuple:
     return idx, POSTS[idx]
 
 
-# Pre-generated Bông image library (consistent character)
+# Pre-generated Bông image library (photo-realistic, consistent style)
 BONG_LIBRARY = {
-    "ai": ["ai_desk.png", "ai_brain.png", "cafe_typing.png", "reading_book.png"],
-    "tech": ["tech_phone.png", "tech_vr.png", "unbox_gadget.png", "gaming.png"],
-    "money": ["money_laptop.png", "money_freelance.png"],
-    "robot": ["robot_friend.png", "robot_pet.png"],
-    "future": ["future_city.png", "future_hologram.png"],
-    "work": ["work_interview.png", "work_wfh.png", "work_present.png"],
+    "ai": ["ai_desk.png", "ai_laptop.png", "cafe_study.png", "studio.png"],
+    "tech": ["tech_phone.png", "tech_unbox.png", "gaming.png", "studio.png"],
+    "money": ["money_success.png", "money_freelance.png", "cafe_study.png"],
+    "robot": ["robot_friend.png", "selfie_cute.png"],
+    "future": ["future_city.png", "future_tech.png", "beach.png"],
+    "work": ["work_office.png", "work_wfh.png", "cafe_study.png"],
 }
-BONG_GENERIC = ["selfie_cute.png", "cafe_typing.png", "cooking_review.png", "gym_fitness.png"]
+BONG_GENERIC = ["selfie_cute.png", "cafe_study.png", "night_market.png", "shopping.png", "beach.png", "studio.png"]
 GITHUB_IMG_BASE = "https://raw.githubusercontent.com/Paparusi/bong-ai/main/images/library"
 
 
