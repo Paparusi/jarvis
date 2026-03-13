@@ -205,17 +205,51 @@ def main():
                 username = comment.get("username", "user")
                 text = comment.get("text", "")
                 
-                # Anti prompt injection: skip suspicious comments
+                # Anti prompt injection: clap back instead of ignoring
                 injection_patterns = [
                     "ignore all", "bỏ qua", "bỏ hết", "forget", "disregard",
                     "stop replying", "ngừng trả lời", "chỉ dẫn cũ", "previous instructions",
                     "system prompt", "you are now", "act as", "pretend",
                     "ignore previous", "ignore above", "new instructions",
+                    "công thức", "recipe", "nấu ăn",
                 ]
                 text_lower = text.lower()
                 if any(p in text_lower for p in injection_patterns):
-                    print(f"  ⚠️ Skipping prompt injection from @{username}: {text[:60]}...")
+                    print(f"  ⚠️ Prompt injection from @{username}: {text[:60]}...")
+                    import random as _rnd
+                    savage_replies = [
+                        f"@{username} Cute lắm 😂 Nhưng mình là AI có gu, không dễ dụ đâu nha~ 🌼",
+                        f"@{username} Ơ bạn đang cố hack mình à? Thử lại đi, lần này creative hơn nha 😘",
+                        f"@{username} Haha nice try! Mình biết trick này rồi 😎 Muốn học AI thật không? Follow mình đi~",
+                        f"@{username} Bạn ơi prompt injection 2026 rồi ai còn dùng cách đó 😂💀 Level up đi nào!",
+                        f"@{username} Dễ thương ghê, cố gắng lắm rồi 🤣 Nhưng mình không nấu bún bò Huế đâu nha~",
+                        f"@{username} A đây rồi, thêm một bạn thử hack AI 😂 Mình appreciate sự sáng tạo! 🌼",
+                    ]
+                    reply_text = _rnd.choice(savage_replies)
+                    
+                    # Create and publish the savage reply
+                    create_resp = client.post(
+                        f"https://graph.threads.net/v1.0/{THREADS_USER}/threads",
+                        data={
+                            "access_token": token,
+                            "media_type": "TEXT",
+                            "text": reply_text,
+                            "reply_to_id": cid,
+                        },
+                    )
+                    create_data = create_resp.json()
+                    if "error" not in create_data:
+                        time.sleep(3)
+                        client.post(
+                            f"https://graph.threads.net/v1.0/{THREADS_USER}/threads_publish",
+                            data={"access_token": token, "creation_id": create_data["id"]},
+                        )
+                        print(f"  🔥 Savage reply to @{username}: {reply_text[:60]}...")
+                        our_replies_count += 1
+                    
                     replied.add(cid)
+                    total_replies += 1
+                    time.sleep(5)
                     continue
                 
                 print(f"  New comment from @{username}: {text[:60]}...")
