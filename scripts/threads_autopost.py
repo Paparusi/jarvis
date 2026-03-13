@@ -456,82 +456,26 @@ def pick_post(posted: list) -> tuple:
     return idx, POSTS[idx]
 
 
-def generate_bong_image(category: str) -> str | None:
-    """Generate a Bông image using Imagen 4. Returns image URL or None."""
-    try:
-        gemini_key = Path(GEMINI_KEY_FILE).read_text().strip()
-    except FileNotFoundError:
-        print("⚠️ Gemini key not found, falling back to Unsplash")
-        return None
+# Pre-generated Bông image library (consistent character)
+BONG_LIBRARY = {
+    "ai": ["ai_desk.png", "ai_brain.png", "cafe_typing.png", "reading_book.png"],
+    "tech": ["tech_phone.png", "tech_vr.png", "unbox_gadget.png", "gaming.png"],
+    "money": ["money_laptop.png", "money_freelance.png"],
+    "robot": ["robot_friend.png", "robot_pet.png"],
+    "future": ["future_city.png", "future_hologram.png"],
+    "work": ["work_interview.png", "work_wfh.png", "work_present.png"],
+}
+BONG_GENERIC = ["selfie_cute.png", "cafe_typing.png", "cooking_review.png", "gym_fitness.png"]
+GITHUB_IMG_BASE = "https://raw.githubusercontent.com/Paparusi/bong-ai/main/images/library"
 
-    scene = random.choice(BONG_SCENES.get(category, BONG_SCENES["ai"]))
 
-    try:
-        with httpx.Client(timeout=60) as client:
-            resp = client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict",
-                params={"key": gemini_key},
-                json={
-                    "instances": [{"prompt": scene}],
-                    "parameters": {
-                        "sampleCount": 1,
-                        "aspectRatio": "1:1",
-                        "personGeneration": "allow_all",
-                    },
-                },
-            )
-
-            if resp.status_code != 200:
-                print(f"⚠️ Imagen 4 error {resp.status_code}: {resp.text[:200]}")
-                return None
-
-            data = resp.json()
-            predictions = data.get("predictions", [])
-            if not predictions:
-                print("⚠️ Imagen 4 returned no predictions")
-                return None
-
-            # Save image to file
-            img_b64 = predictions[0].get("bytesBase64Encoded")
-            if not img_b64:
-                print("⚠️ No image data in response")
-                return None
-
-            IMAGES_DIR.mkdir(parents=True, exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            img_path = IMAGES_DIR / f"bong_{category}_{timestamp}.png"
-            img_path.write_bytes(base64.b64decode(img_b64))
-            print(f"🎨 Generated Bông image: {img_path} ({img_path.stat().st_size // 1024}KB)")
-
-            # Upload to GitHub repo (public) for hosting
-            github_pat = Path(GITHUB_PAT_FILE).read_text().strip()
-            filename = f"bong_{category}_{timestamp}.png"
-            upload_resp = client.put(
-                f"https://api.github.com/repos/Paparusi/bong-ai/contents/images/{filename}",
-                headers={
-                    "Authorization": f"Bearer {github_pat}",
-                    "Accept": "application/vnd.github.v3+json",
-                },
-                json={
-                    "message": f"Add Bông image: {filename}",
-                    "content": img_b64,
-                    "branch": "main",
-                },
-                timeout=30,
-            )
-
-            if upload_resp.status_code in (200, 201):
-                # Use raw GitHub URL
-                img_url = f"https://raw.githubusercontent.com/Paparusi/bong-ai/main/images/{filename}"
-                print(f"📤 Uploaded to GitHub: {img_url}")
-                return img_url
-            else:
-                print(f"⚠️ GitHub upload failed: {upload_resp.status_code} {upload_resp.text[:200]}")
-                return None
-
-    except Exception as e:
-        print(f"⚠️ Image generation error: {e}")
-        return None
+def get_bong_image(category: str) -> str:
+    """Pick a Bông image from the pre-generated library."""
+    images = BONG_LIBRARY.get(category, BONG_GENERIC)
+    chosen = random.choice(images)
+    url = f"{GITHUB_IMG_BASE}/{chosen}"
+    print(f"🌼 Bông image: {chosen}")
+    return url
 
 
 def main():
@@ -546,13 +490,8 @@ def main():
     print(f"[{now}] Posting #{idx} (cat={cat})")
     print(f"Hook: {text.split(chr(10))[0]}")
 
-    # Try to generate Bông image with Imagen 4
-    image_url = generate_bong_image(cat)
-
-    if not image_url:
-        # Fallback to Unsplash
-        image_url = random.choice(FALLBACK_IMAGES.get(cat, FALLBACK_IMAGES["ai"]))
-        print(f"📷 Using fallback Unsplash: {image_url}")
+    # Pick Bông image from library
+    image_url = get_bong_image(cat)
     
     with httpx.Client(timeout=30) as client:
         # Step 1: Create container
